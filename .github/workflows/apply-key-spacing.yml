@@ -1,0 +1,243 @@
+name: Apply hotkey and Spire spacing update
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Apply requested source changes
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          def replace(path, old, new, expected=1):
+              p = Path(path)
+              text = p.read_text(encoding="utf-8")
+              count = text.count(old)
+              if count != expected:
+                  raise SystemExit(f"{path}: expected {expected} matches, found {count} for {old[:80]!r}")
+              p.write_text(text.replace(old, new), encoding="utf-8")
+
+          def sub(path, pattern, repl, expected=1):
+              p = Path(path)
+              text = p.read_text(encoding="utf-8")
+              new, count = re.subn(pattern, repl, text, flags=re.S)
+              if count != expected:
+                  raise SystemExit(f"{path}: expected {expected} regex matches, found {count}: {pattern[:80]!r}")
+              p.write_text(new, encoding="utf-8")
+
+          # Hotkeys: add Tilde (`/~) and Tab as first-class global hotkeys.
+          replace(
+              "src/hotkey.rs",
+              "/// The F-keys a user may bind to a macro. F8 stays reserved.",
+              "/// Keys a user may bind to a macro. F8 stays reserved."
+          )
+          replace(
+              "src/hotkey.rs",
+              'pub enum HotkeyKey {\n    #[serde(rename = "F1")]\n    F1,',
+              'pub enum HotkeyKey {\n    #[serde(rename = "Tilde")]\n    Tilde,\n    #[serde(rename = "Tab")]\n    Tab,\n    #[serde(rename = "F1")]\n    F1,'
+          )
+          replace(
+              "src/hotkey.rs",
+              '    pub const ALL: [Self; 12] = [\n        Self::F1,',
+              '    pub const ALL: [Self; 14] = [\n        Self::Tilde,\n        Self::Tab,\n        Self::F1,'
+          )
+          replace(
+              "src/hotkey.rs",
+              '        match self {\n            Self::F1 => "F1",',
+              '        match self {\n            Self::Tilde => "Tilde",\n            Self::Tab => "Tab",\n            Self::F1 => "F1",'
+          )
+          replace(
+              "src/hotkey.rs",
+              '    /// Win32 virtual key code (`VK_F1` .. `VK_F12`).\n    pub const fn virtual_key(self) -> u16 {\n        0x70 + (self as u16)\n    }',
+              '    /// Win32 virtual key code used by `RegisterHotKey`.\n    pub const fn virtual_key(self) -> u16 {\n        match self {\n            Self::Tilde => 0xC0, // VK_OEM_3 (`/~ physical key)\n            Self::Tab => 0x09,   // VK_TAB\n            Self::F1 => 0x70,\n            Self::F2 => 0x71,\n            Self::F3 => 0x72,\n            Self::F4 => 0x73,\n            Self::F5 => 0x74,\n            Self::F6 => 0x75,\n            Self::F7 => 0x76,\n            Self::F8 => 0x77,\n            Self::F9 => 0x78,\n            Self::F10 => 0x79,\n            Self::F11 => 0x7A,\n            Self::F12 => 0x7B,\n        }\n    }'
+          )
+          replace(
+              "src/hotkey.rs",
+              '    fn virtual_keys_are_vk_f1_to_vk_f12() {\n        assert_eq!(HotkeyKey::F1.virtual_key(), 0x70);\n        assert_eq!(HotkeyKey::F6.virtual_key(), 0x75);\n        assert_eq!(HotkeyKey::F12.virtual_key(), 0x7B);\n    }',
+              '    fn virtual_keys_include_tilde_tab_and_f_keys() {\n        assert_eq!(HotkeyKey::Tilde.virtual_key(), 0xC0);\n        assert_eq!(HotkeyKey::Tab.virtual_key(), 0x09);\n        assert_eq!(HotkeyKey::F1.virtual_key(), 0x70);\n        assert_eq!(HotkeyKey::F6.virtual_key(), 0x75);\n        assert_eq!(HotkeyKey::F12.virtual_key(), 0x7B);\n    }'
+          )
+
+          # Defaults: former F6 trigger -> Tilde; former F7 Spire action -> Tab.
+          replace(
+              "src/config.rs",
+              'pub const DEFAULT_TRIGGER_HOTKEY: HotkeyKey = HotkeyKey::F6;',
+              'pub const DEFAULT_TRIGGER_HOTKEY: HotkeyKey = HotkeyKey::Tilde;'
+          )
+          replace(
+              "src/config.rs",
+              'pub const DEFAULT_SPIRE_ACTION_HOTKEY: HotkeyKey = HotkeyKey::F7;',
+              'pub const DEFAULT_SPIRE_ACTION_HOTKEY: HotkeyKey = HotkeyKey::Tab;'
+          )
+          replace(
+              "src/config.rs",
+              '        let config = file.into_config()?;\n        config.validate()?;\n        Ok(config)',
+              '        let mut config = file.into_config()?;\n        // Migrate the previous shipped default pair without disturbing any other\n        // user-selected hotkey combination.\n        if config.trigger_hotkey == HotkeyKey::F6\n            && config.spire_action_hotkey == HotkeyKey::F7\n        {\n            config.trigger_hotkey = DEFAULT_TRIGGER_HOTKEY;\n            config.spire_action_hotkey = DEFAULT_SPIRE_ACTION_HOTKEY;\n        }\n        config.validate()?;\n        Ok(config)'
+          )
+          sub(
+              "src/config.rs",
+              r'    #\[test\]\n    fn the_default_trigger_is_f6_and_the_emergency_key_stays_f8\(\) \{.*?\n    \}\n\n    #\[test\]\n    fn a_file_without_the_spire_action_key_gets_f7\(\) \{.*?\n    \}',
+              '''    #[test]\n    fn the_default_trigger_is_tilde_action_is_tab_and_emergency_stays_f8() {\n        let config = Config::default();\n        assert_eq!(config.trigger_hotkey, HotkeyKey::Tilde);\n        assert_eq!(config.spire_action_hotkey, HotkeyKey::Tab);\n        assert_eq!(config.bindings().get(HotkeySlot::Trigger), HotkeyKey::Tilde);\n        assert_eq!(\n            config.bindings().get(HotkeySlot::SpireAction),\n            HotkeyKey::Tab\n        );\n        assert_eq!(config.bindings().emergency, HotkeyKey::F8);\n        assert!(config.force_build, "the forced mode is the default");\n    }\n\n    #[test]\n    fn a_file_without_the_spire_action_key_gets_tab() {\n        assert!(!SAMPLE.contains("spire_action_hotkey"), "{SAMPLE}");\n        let config = Config::parse(SAMPLE).expect("an older file must still load");\n        assert_eq!(config.spire_action_hotkey, HotkeyKey::Tab);\n    }'''
+          )
+          replace(
+              "src/config.rs",
+              '            assert_eq!(config.spire_action_hotkey, HotkeyKey::F7);',
+              '            assert_eq!(config.spire_action_hotkey, HotkeyKey::Tab);'
+          )
+          replace(
+              "src/config.rs",
+              '        assert_eq!(reloaded.spire_action_hotkey, HotkeyKey::F7);',
+              '        assert_eq!(reloaded.spire_action_hotkey, HotkeyKey::Tab);'
+          )
+          sub(
+              "src/config.rs",
+              r'    #\[test\]\n    fn a_row_trigger_on_f7_moves_the_absent_action_key_instead_of_rejecting_the_file\(\) \{.*?\n    \}',
+              '''    #[test]\n    fn a_row_trigger_on_tab_moves_the_absent_action_key_instead_of_rejecting_the_file() {\n        // Tab is now the default action key, so an older file that explicitly\n        // used Tab as its row trigger must move the absent action key to F9.\n        let text = SAMPLE.replace("trigger_hotkey = \\"F6\\"\\n", "trigger_hotkey = \\"Tab\\"\\n");\n        let config = Config::parse(&text).expect("previously valid file");\n        assert_eq!(config.trigger_hotkey, HotkeyKey::Tab);\n        assert_eq!(config.spire_action_hotkey, FALLBACK_SPIRE_ACTION_HOTKEY);\n        assert_eq!(config.validate(), Ok(()));\n    }'''
+          )
+          replace(
+              "src/config.rs",
+              '        assert_eq!(config.spire_action_hotkey, HotkeyKey::F7);\n    }\n\n    #[test]\n    fn the_trigger_key_migrates_from_the_old_two_hotkey_files()',
+              '        assert_eq!(config.spire_action_hotkey, HotkeyKey::Tab);\n    }\n\n    #[test]\n    fn the_trigger_key_migrates_from_the_old_two_hotkey_files()'
+          )
+          replace(
+              "src/config.rs",
+              '            Config::parse(&none).expect("no hotkey key").trigger_hotkey,\n            HotkeyKey::F6',
+              '            Config::parse(&none).expect("no hotkey key").trigger_hotkey,\n            HotkeyKey::Tilde'
+          )
+
+          # Keep Spire preview geometry at 216px, but use Colony's 144px row spacing.
+          replace(
+              "src/macros.rs",
+              '    /// Footprint width in client pixels, and therefore the exact\n    /// centre-to-centre spacing of a row (`64`/`96` logical px at 1080p).',
+              '    /// Actual placement-preview footprint width in client pixels.\n    /// This remains building-specific even when row spacing is intentionally tighter.'
+          )
+          replace(
+              "src/macros.rs",
+              '    /// Half of [`Self::footprint_px`], used for the safe-area math.\n    pub const fn half_px(self) -> i32 {',
+              '    /// Horizontal centre-to-centre spacing used by the row builder.\n    /// Both Colony and Spire intentionally use the Colony spacing (144 px).\n    pub const fn row_spacing_px(self) -> i32 {\n        144\n    }\n\n    /// Half of [`Self::footprint_px`], used for preview geometry.\n    pub const fn half_px(self) -> i32 {'
+          )
+          replace(
+              "src/macros.rs",
+              '        assert_eq!(BuildTarget::Spire.footprint_px(), 3 * TILE_PX);\n        for target in BuildTarget::ALL {',
+              '        assert_eq!(BuildTarget::Spire.footprint_px(), 3 * TILE_PX);\n        assert_eq!(BuildTarget::Colony.row_spacing_px(), 2 * TILE_PX);\n        assert_eq!(BuildTarget::Spire.row_spacing_px(), 2 * TILE_PX);\n        for target in BuildTarget::ALL {'
+          )
+
+          # Planner uses spacing, while preview detection still calls footprint_px().
+          replace(
+              "src/colony.rs",
+              '    let footprint = target.footprint_px();\n    if !crate::play_area::is_playable_point(anchor) {',
+              '    let spacing = target.row_spacing_px();\n    if !crate::play_area::is_playable_point(anchor) {'
+          )
+          replace(
+              "src/colony.rs",
+              '            anchor.offset(footprint * i32::from(index), 0)',
+              '            anchor.offset(spacing * i32::from(index), 0)'
+          )
+          replace(
+              "src/colony.rs",
+              '        let steps = (max_x - anchor_x) / target.footprint_px();',
+              '        let steps = (max_x - anchor_x) / target.row_spacing_px();'
+          )
+          sub(
+              "src/colony.rs",
+              r'    #\[test\]\n    fn plan_row_spaces_spire_footprints_by_216_to_the_right\(\) \{.*?\n    \}',
+              '''    #[test]\n    fn plan_row_spaces_spires_by_the_colony_144_px_interval() {\n        let plan = plan_row(\n            Point::new(400, 400),\n            3,\n            RowMode::LeftToRight,\n            BuildTarget::Spire,\n        )\n        .expect("fits");\n        assert_eq!(plan.target, BuildTarget::Spire);\n        assert_eq!(\n            plan.targets,\n            vec![\n                Point::new(400, 400),\n                Point::new(544, 400),\n                Point::new(688, 400)\n            ]\n        );\n        assert_eq!(BuildTarget::Spire.footprint_px(), 216);\n    }'''
+          )
+          replace(
+              "src/colony.rs",
+              '            let footprint = target.footprint_px();',
+              '            let spacing = target.row_spacing_px();'
+          )
+          replace(
+              "src/colony.rs",
+              'anchor.offset(footprint * i32::from(index), 0)',
+              'anchor.offset(spacing * i32::from(index), 0)',
+              expected=1
+          )
+          replace(
+              "src/colony.rs",
+              'anchor.offset(footprint * i32::from(*index), 0)',
+              'anchor.offset(spacing * i32::from(*index), 0)'
+          )
+          replace(
+              "src/colony.rs",
+              'anchor.x + footprint * (i32::from(count) - 1)',
+              'anchor.x + spacing * (i32::from(count) - 1)'
+          )
+          replace(
+              "src/colony.rs",
+              'let steps = (point.x - anchor.x) / footprint;',
+              'let steps = (point.x - anchor.x) / spacing;'
+          )
+          replace(
+              "src/colony.rs",
+              'anchor.offset(footprint * steps, 0),\n                                "target off the {footprint} px grid of {target:?}"',
+              'anchor.offset(spacing * steps, 0),\n                                "target off the {spacing} px grid of {target:?}"'
+          )
+          sub(
+              "src/colony.rs",
+              r'    #\[test\]\n    fn a_spire_row_does_not_fit_as_many_buildings_as_a_colony_row\(\) \{.*?\n    \}\n\n    #\[test\]',
+              '''    #[test]\n    fn spire_rows_use_colony_spacing_while_preview_size_stays_216() {\n        let anchor = Point::new(200, 400);\n        assert_eq!(BuildTarget::Colony.row_spacing_px(), 144);\n        assert_eq!(BuildTarget::Spire.row_spacing_px(), 144);\n        assert_eq!(BuildTarget::Spire.footprint_px(), 216);\n        assert_eq!(max_count_that_fits(BuildTarget::Colony, anchor.x), 12);\n        assert_eq!(max_count_that_fits(BuildTarget::Spire, anchor.x), 12);\n\n        for mode in RowMode::ALL {\n            let colony = plan_row(anchor, 12, mode, BuildTarget::Colony).expect("colony fits");\n            let spire = plan_row(anchor, 12, mode, BuildTarget::Spire).expect("spire fits");\n            assert_eq!(colony.targets, spire.targets, "{mode:?}");\n        }\n    }\n\n    #[test]'''
+          )
+          replace(
+              "src/colony.rs",
+              '            assert!(plan_row(Point::new(200, 400), 8, mode, BuildTarget::Spire).is_ok());\n            assert!(\n                plan_row(Point::new(200, 400), 9, mode, BuildTarget::Spire).is_err(),\n                "{mode:?}"\n            );',
+              '            assert!(plan_row(Point::new(160, 400), 12, mode, BuildTarget::Spire).is_ok());'
+          )
+          sub(
+              "src/colony.rs",
+              r'    #\[test\]\n    fn a_spire_row_presses_v_s_and_spaces_the_orders_by_216\(\) \{.*?\n    \}',
+              '''    #[test]\n    fn a_spire_row_presses_v_s_with_144_spacing_and_keeps_216_preview() {\n        // Row centres use Colony spacing, while the fake preview still paints\n        // and verifies the Spire's actual 216 px footprint.\n        let (fake, report) = run(3, BuildTarget::Spire);\n        assert_eq!(report.outcome, Outcome::Completed);\n        assert_eq!(report.target, BuildTarget::Spire);\n        assert_eq!(report.detected, 3);\n        assert_eq!(report.orders_issued, 3);\n        assert_eq!(\n            report.into_run_report().macro_id,\n            MacroId::Spire,\n            "the report must say which building was ordered"\n        );\n        assert_eq!(\n            fake.orders(),\n            vec![\n                Point::new(400, 400),\n                Point::new(544, 400),\n                Point::new(688, 400),\n            ],\n            "Spire row spacing must match the Colony's 144 px interval"\n        );\n        assert_eq!(\n            fake.events().join(" "),\n            "save9(3) select(2) vs place(400,400) recall9(3) shift(2) save9(2) \\\n             select(1) vs place(544,400) recall9(2) shift(1) save9(1) vs place(688,400)"\n        );\n        assert!(fake.held().is_empty(), "no key may stay held");\n    }'''
+          )
+          replace(
+              "src/colony.rs",
+              '        for (count, target) in [(12, BuildTarget::Colony), (9, BuildTarget::Spire)] {',
+              '        for (count, target) in [(12, BuildTarget::Colony), (12, BuildTarget::Spire)] {'
+          )
+          PY
+
+      - name: Format
+        run: cargo fmt --all
+
+      - name: Test
+        run: cargo test --locked
+
+      - name: Build release EXE
+        run: cargo build --release --locked
+
+      - name: Commit source update
+        shell: bash
+        run: |
+          git rm .github/workflows/apply-key-spacing.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/hotkey.rs src/config.rs src/macros.rs src/colony.rs
+          git commit -m "Bind Tilde/Tab hotkeys and use 144px Spire spacing"
+          git push origin HEAD:main
+
+      - name: Upload Windows EXE
+        uses: actions/upload-artifact@v4
+        with:
+          name: my-macro-windows-key-spacing
+          path: target/release/oh-my-macro.exe
+          if-no-files-found: error
+          retention-days: 7
