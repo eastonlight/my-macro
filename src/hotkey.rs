@@ -175,7 +175,9 @@ impl Bindings {
     /// The configurable row trigger and Spire action, plus the fixed emergency
     /// stop.
     pub fn new(trigger: HotkeyKey, spire_action: HotkeyKey) -> Self {
-        let vacant_colony = [HotkeyKey::F5, HotkeyKey::F6, HotkeyKey::F7]
+        // F5 is not offered: StarCraft 1 binds F2-F5 itself, so the fallback
+        // chain stays on keys the game leaves alone.
+        let vacant_colony = [HotkeyKey::F6, HotkeyKey::F7, HotkeyKey::F9]
             .into_iter()
             .find(|key| *key != trigger && *key != spire_action)
             .expect("two bindings cannot occupy all three fallback keys");
@@ -340,7 +342,7 @@ mod tests {
             vec![
                 (HotkeySlot::Trigger, HotkeyKey::F6),
                 (HotkeySlot::SpireAction, HotkeyKey::F7),
-                (HotkeySlot::VacantColony, HotkeyKey::F5),
+                (HotkeySlot::VacantColony, HotkeyKey::F9),
                 (HotkeySlot::Emergency, HotkeyKey::F8),
             ]
         );
@@ -366,7 +368,7 @@ mod tests {
         assert_eq!(
             registrar.unregistered(),
             vec![
-                (HotkeySlot::VacantColony, HotkeyKey::F5),
+                (HotkeySlot::VacantColony, HotkeyKey::F9),
                 (HotkeySlot::SpireAction, HotkeyKey::F7),
                 (HotkeySlot::Trigger, HotkeyKey::F6),
             ]
@@ -405,7 +407,7 @@ mod tests {
         assert_eq!(
             registrar.unregistered(),
             vec![
-                (HotkeySlot::VacantColony, HotkeyKey::F5),
+                (HotkeySlot::VacantColony, HotkeyKey::F9),
                 (HotkeySlot::SpireAction, HotkeyKey::F7),
                 (HotkeySlot::Trigger, HotkeyKey::F6),
             ]
@@ -415,7 +417,7 @@ mod tests {
     #[test]
     fn unavailable_third_key_rolls_back_both_prior_bindings() {
         let mut registrar = FakeRegistrar::default();
-        registrar.fail_on(HotkeySlot::VacantColony, "F5 occupied");
+        registrar.fail_on(HotkeySlot::VacantColony, "F9 occupied");
         let error = register_all(
             &mut registrar,
             Bindings::new(HotkeyKey::Tilde, HotkeyKey::Tab),

@@ -32,7 +32,10 @@ pub const DEFAULT_TRIGGER_HOTKEY: HotkeyKey = HotkeyKey::Tilde;
 
 /// Default key for the Spire action (scan, click, verified `A`).
 pub const DEFAULT_SPIRE_ACTION_HOTKEY: HotkeyKey = HotkeyKey::Tab;
-pub const DEFAULT_VACANT_COLONY_HOTKEY: HotkeyKey = HotkeyKey::F5;
+/// Default key for the F4 saved-view Colony search. F5 is deliberately not
+/// used: StarCraft 1 itself binds F-keys (F2-F5 among them), so the default
+/// stays on an F-key the game does not use.
+pub const DEFAULT_VACANT_COLONY_HOTKEY: HotkeyKey = HotkeyKey::F6;
 
 fn default_vacant_colony_hotkey(trigger: HotkeyKey, action: HotkeyKey) -> HotkeyKey {
     Bindings::new(trigger, action).vacant_colony
@@ -72,7 +75,9 @@ pub struct Config {
     /// `spire_scan_only` key load as usual — the legacy key is parsed and
     /// ignored, never turned into a setting.
     pub spire_action_hotkey: HotkeyKey,
-    /// F4 saved-view Colony search. F4 itself stays available to the game.
+    /// F4 saved-view Colony search (default [`DEFAULT_VACANT_COLONY_HOTKEY`]).
+    /// F4 itself stays available to the game: it is never a binding here, and
+    /// the macro only *presses* F4 to recall the player's saved view.
     pub vacant_colony_hotkey: HotkeyKey,
     /// Which building the row-build macro orders.
     pub build_target: BuildTarget,
@@ -553,7 +558,7 @@ target_process = "StarCraft.exe"
         let config = Config::default();
         assert_eq!(config.trigger_hotkey, HotkeyKey::Tilde);
         assert_eq!(config.spire_action_hotkey, HotkeyKey::Tab);
-        assert_eq!(config.vacant_colony_hotkey, HotkeyKey::F5);
+        assert_eq!(config.vacant_colony_hotkey, HotkeyKey::F6);
         assert_eq!(config.build_target, BuildTarget::Colony);
         assert_eq!(config.colony_row_mode, RowMode::LeftToRight);
         assert!(config.force_build, "the forced mode is the default");
@@ -958,7 +963,7 @@ target_process = "StarCraft.exe"
         );
         assert_eq!(
             config.bindings().get(HotkeySlot::VacantColony),
-            HotkeyKey::F5
+            HotkeyKey::F6
         );
         assert_eq!(config.bindings().emergency, HotkeyKey::F8);
         assert!(config.force_build, "the forced mode is the default");
@@ -1028,19 +1033,31 @@ target_process = "StarCraft.exe"
     }
 
     #[test]
-    fn the_third_key_defaults_to_f5_and_moves_out_of_the_way() {
-        // An older file without the key gets the free default.
+    fn the_third_key_defaults_to_f6_and_moves_out_of_the_way() {
+        // The default never lands on F5: StarCraft 1 uses it itself.
+        assert_eq!(DEFAULT_VACANT_COLONY_HOTKEY, HotkeyKey::F6);
+        assert_ne!(DEFAULT_VACANT_COLONY_HOTKEY, HotkeyKey::F5);
+
+        // An older file without the key gets the free default. `SAMPLE` already
+        // binds the row trigger to F6, so the third key moves to the next free
+        // F-key instead of making the file invalid.
         let config = Config::parse(SAMPLE).expect("older file");
-        assert_eq!(config.vacant_colony_hotkey, HotkeyKey::F5);
+        assert_eq!(config.trigger_hotkey, HotkeyKey::F6);
+        assert_eq!(config.vacant_colony_hotkey, HotkeyKey::F7);
         assert_eq!(config.validate(), Ok(()));
 
-        // If F5 is already taken by another binding, the default moves to the
-        // next free F-key instead of making the file invalid.
-        let text = SAMPLE.replace("trigger_hotkey = \"F6\"\n", "trigger_hotkey = \"F5\"\n");
+        // Both F6 and F7 taken: the chain continues to F9, which is also free
+        // in the game.
+        let text = SAMPLE.replace(
+            "trigger_hotkey = \"F6\"\n",
+            "trigger_hotkey = \"F6\"\nspire_action_hotkey = \"F7\"\n",
+        );
         let config = Config::parse(&text).expect("previously valid file");
-        assert_eq!(config.trigger_hotkey, HotkeyKey::F5);
-        assert_eq!(config.vacant_colony_hotkey, HotkeyKey::F6);
+        assert_eq!(config.vacant_colony_hotkey, HotkeyKey::F9);
         assert_eq!(config.validate(), Ok(()));
+
+        // The defaults (Tilde/Tab) leave F6 for the third key.
+        assert_eq!(Config::default().vacant_colony_hotkey, HotkeyKey::F6);
 
         // A file that already names the key keeps exactly that key.
         let text = format!("{SAMPLE}vacant_colony_hotkey = \"F11\"\n");
@@ -1097,7 +1114,7 @@ target_process = "StarCraft.exe"
     #[test]
     fn the_third_key_is_written_and_read_back() {
         let text = Config::default().to_toml().expect("serialize");
-        assert!(text.contains("vacant_colony_hotkey = \"F5\""), "{text}");
+        assert!(text.contains("vacant_colony_hotkey = \"F6\""), "{text}");
         assert_eq!(written_keys(&text), WRITTEN_KEYS.to_vec(), "{text}");
     }
 
