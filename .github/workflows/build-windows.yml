@@ -1,0 +1,30 @@
+name: Build Windows EXE
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build release EXE
+        run: cargo build --release --locked
+
+      - name: Upload EXE
+        uses: actions/upload-artifact@v4
+        with:
+          name: my-macro-windows
+          path: target/release/oh-my-macro.exe
+          if-no-files-found: error
+          retention-days: 7
