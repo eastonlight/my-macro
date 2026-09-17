@@ -1,0 +1,6 @@
+/target
+**/*.rs.bk
+*.pdb
+*.exe
+# IDE project state (JetBrains); keep the repo source-only.
+.idea/
