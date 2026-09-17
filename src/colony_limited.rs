@@ -9,7 +9,7 @@
 mod inner;
 
 pub use inner::{
-    CAPTURE_TIMEOUT, EDGE_MARGIN, HUD_TOP, SNAP_SLACK, ColonyReport, RowError, RowMode, RowPlan,
+    CAPTURE_TIMEOUT, ColonyReport, EDGE_MARGIN, HUD_TOP, RowError, RowMode, RowPlan, SNAP_SLACK,
     plan_row,
 };
 
@@ -17,7 +17,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use crate::engine::{CANCEL_POLL_INTERVAL, Outcome};
-use crate::frame::Point;
 use crate::input::{DesktopAdapter, InputError};
 use crate::macros::{BuildTarget, Key, Timing};
 use crate::vision::{self, SelectionRead};
@@ -124,8 +123,7 @@ fn trim_selection_if_needed(
         adapter
             .move_cursor(anchor)
             .map_err(|error| (failed(error), detected))?;
-        expect_count(adapter, cancel, timing, current)
-            .map_err(|outcome| (outcome, detected))?;
+        expect_count(adapter, cancel, timing, current).map_err(|outcome| (outcome, detected))?;
     }
 
     // The inner implementation snapshots the cursor as its row anchor, so put

@@ -54,9 +54,10 @@ fn spire_is_v_s_then_a_click_at_the_current_mouse_position() {
 }
 
 #[test]
-fn the_default_configuration_is_f6_with_20ms_intervals_for_both() {
+fn the_default_configuration_uses_tilde_and_tab_with_20ms_intervals() {
     let config = Config::default();
-    assert_eq!(config.trigger_hotkey, HotkeyKey::F6);
+    assert_eq!(config.trigger_hotkey, HotkeyKey::Tilde);
+    assert_eq!(config.spire_action_hotkey, HotkeyKey::Tab);
     assert_eq!(config.build_target, BuildTarget::Colony);
     assert_eq!(config.press_ms, 20);
     assert_eq!(config.gap_ms, 20);
@@ -64,8 +65,8 @@ fn the_default_configuration_is_f6_with_20ms_intervals_for_both() {
     assert_eq!(config.validate(), Ok(()));
 
     let bindings = Bindings::new(config.trigger_hotkey, config.spire_action_hotkey);
-    assert_eq!(bindings.get(HotkeySlot::Trigger), HotkeyKey::F6);
-    assert_eq!(bindings.get(HotkeySlot::SpireAction), HotkeyKey::F7);
+    assert_eq!(bindings.get(HotkeySlot::Trigger), HotkeyKey::Tilde);
+    assert_eq!(bindings.get(HotkeySlot::SpireAction), HotkeyKey::Tab);
     assert_eq!(bindings.get(HotkeySlot::Emergency), HotkeyKey::F8);
 }
 
@@ -116,16 +117,18 @@ fn both_hotkeys_share_one_timing_pair() {
 fn the_build_target_picks_the_keys_and_the_row_spacing() {
     assert_eq!(BuildTarget::Colony.build_keys(), [Key::B, Key::C]);
     assert_eq!(BuildTarget::Spire.build_keys(), [Key::V, Key::S]);
+    // Both buildings share the two-tile pitch.
     assert_eq!(BuildTarget::Colony.footprint_px(), 144);
-    assert_eq!(BuildTarget::Spire.footprint_px(), 216);
+    assert_eq!(BuildTarget::Spire.footprint_px(), 144);
 
     let anchor = Point::new(400, 400);
     let colony = plan_row(anchor, 3, RowMode::LeftToRight, BuildTarget::Colony).expect("fits");
     let spire = plan_row(anchor, 3, RowMode::LeftToRight, BuildTarget::Spire).expect("fits");
 
     assert_eq!(colony.targets[1], Point::new(544, 400));
-    assert_eq!(spire.targets[1], Point::new(616, 400));
-    // A wider footprint fits fewer buildings in the same playable width.
+    assert_eq!(spire.targets[1], Point::new(544, 400));
+    assert_eq!(colony.targets, spire.targets, "the same pitch");
+    // Twelve buildings still need the left part of the screen: 11 * 144 px.
     assert!(
         plan_row(
             Point::new(160, 400),
@@ -137,12 +140,15 @@ fn the_build_target_picks_the_keys_and_the_row_spacing() {
     );
     assert_eq!(
         plan_row(
-            Point::new(200, 400),
-            9,
+            Point::new(400, 400),
+            12,
             RowMode::LeftToRight,
             BuildTarget::Spire
         ),
-        Err(RowError::RowDoesNotFit { count: 9, fits: 8 })
+        Err(RowError::RowDoesNotFit {
+            count: 12,
+            fits: 11
+        })
     );
 }
 

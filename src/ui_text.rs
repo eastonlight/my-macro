@@ -933,7 +933,22 @@ mod tests {
                 hint.contains("트리거") || hint.contains("trigger key"),
                 "{hint}"
             );
-            assert!(hint.contains("144") && hint.contains("216"), "{hint}");
+            assert!(hint.contains("144"), "{hint}");
+            assert!(
+                !hint.contains("216"),
+                "both buildings share the 144 px pitch now: {hint}"
+            );
+            // Both buildings are described as 2x2 now that they share the pitch.
+            assert!(
+                labels.colony_target_name.contains("2x2"),
+                "{}",
+                labels.colony_target_name
+            );
+            assert!(
+                labels.spire_target_name.contains("2x2"),
+                "{}",
+                labels.spire_target_name
+            );
             assert_ne!(labels.build_spire_checkbox, labels.colony_target_name);
         }
         assert_ne!(

@@ -359,11 +359,12 @@ mod tests {
     }
 
     #[test]
-    fn build_target_footprints_are_two_and_three_tiles() {
-        // 1920x1080 renders one tile (32 logical px) as 72 client px.
+    fn both_build_targets_use_a_two_tile_footprint() {
+        // 1920x1080 renders one tile (32 logical px) as 72 client px, and both
+        // supported buildings are ordered on the same two-tile pitch.
         const TILE_PX: i32 = 72;
         assert_eq!(BuildTarget::Colony.footprint_px(), 2 * TILE_PX);
-        assert_eq!(BuildTarget::Spire.footprint_px(), 3 * TILE_PX);
+        assert_eq!(BuildTarget::Spire.footprint_px(), 2 * TILE_PX);
         for target in BuildTarget::ALL {
             assert_eq!(target.half_px(), target.footprint_px() / 2);
             assert!(target.half_px() < target.footprint_px());

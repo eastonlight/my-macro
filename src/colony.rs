@@ -1256,7 +1256,7 @@ mod tests {
     }
 
     #[test]
-    fn plan_row_spaces_spire_footprints_by_216_to_the_right() {
+    fn plan_row_spaces_spire_footprints_by_144_to_the_right() {
         let plan = plan_row(
             Point::new(400, 400),
             3,
@@ -1269,8 +1269,8 @@ mod tests {
             plan.targets,
             vec![
                 Point::new(400, 400),
-                Point::new(616, 400),
-                Point::new(832, 400)
+                Point::new(544, 400),
+                Point::new(688, 400)
             ]
         );
     }
@@ -1425,24 +1425,24 @@ mod tests {
     }
 
     #[test]
-    fn a_spire_row_does_not_fit_as_many_buildings_as_a_colony_row() {
-        // From x=200 the full twelve-colony row fits (11 * 144 px = 1584 px,
-        // ending at 1784, inside the 24 px edge guard at 1896), while the wider
-        // Spire footprint only fits eight (7 * 216 px = 1512 px).
+    fn both_targets_share_the_same_two_tile_row_capacity() {
+        // Both buildings are ordered on the same two-tile pitch now, so from
+        // x=200 the full twelve-building row fits for either target
+        // (11 * 144 px = 1584 px, ending at 1784, inside the 24 px edge guard).
         let anchor = Point::new(200, 400);
-        assert_eq!(max_count_that_fits(BuildTarget::Colony, anchor.x), 12);
-        assert_eq!(max_count_that_fits(BuildTarget::Spire, anchor.x), 8);
+        for target in BuildTarget::ALL {
+            assert_eq!(max_count_that_fits(target, anchor.x), 12);
+        }
 
         let colony = plan_row(anchor, 12, RowMode::EndsInward, BuildTarget::Colony).expect("fits");
-        let spire = plan_row(anchor, 8, RowMode::EndsInward, BuildTarget::Spire).expect("fits");
+        let spire = plan_row(anchor, 12, RowMode::EndsInward, BuildTarget::Spire).expect("fits");
         assert_eq!(
             colony.targets[0], spire.targets[0],
             "both rows start at the cursor"
         );
-        let widest = |targets: &[Point]| targets.iter().map(|point| point.x).max().unwrap_or(0);
-        assert!(
-            widest(&colony.targets) > widest(&spire.targets),
-            "the twelve-colony row must reach further right than the eight-Spire row"
+        assert_eq!(
+            colony.targets, spire.targets,
+            "the same pitch must plan the same footprints"
         );
 
         // One more building than the span allows is refused, not clipped.
@@ -1458,10 +1458,11 @@ mod tests {
                 fits: 11
             })
         );
-        assert_eq!(
-            plan_row(anchor, 9, RowMode::LeftToRight, BuildTarget::Spire),
-            Err(RowError::RowDoesNotFit { count: 9, fits: 8 })
-        );
+        for mode in [RowMode::LeftToRight, RowMode::EndsInward] {
+            let colony = plan_row(anchor, 12, mode, BuildTarget::Colony).expect("fits");
+            let spire = plan_row(anchor, 12, mode, BuildTarget::Spire).expect("fits");
+            assert_eq!(colony.targets, spire.targets, "same pitch, {mode:?}");
+        }
     }
 
     #[test]
@@ -1478,9 +1479,11 @@ mod tests {
     }
 
     #[test]
-    fn the_prevalidation_is_the_same_for_both_modes_and_targets() {
+    fn the_prevalidation_is_the_same_for_both_single_row_modes_and_targets() {
+        // Only the two single-row modes cover the same span; `Grid6x2` lays the
+        // row out in two columns-wise rows and is covered separately below.
         for target in BuildTarget::ALL {
-            for mode in RowMode::ALL {
+            for mode in [RowMode::LeftToRight, RowMode::EndsInward] {
                 // Console points and a screen-edge point: refused identically
                 // for every target and row order, before any input.
                 for anchor in [
@@ -1501,14 +1504,12 @@ mod tests {
                 );
             }
         }
-        // The widest row each target can still place, in both modes.
-        for mode in RowMode::ALL {
-            assert!(plan_row(Point::new(160, 400), 12, mode, BuildTarget::Colony).is_ok());
-            assert!(plan_row(Point::new(200, 400), 8, mode, BuildTarget::Spire).is_ok());
-            assert!(
-                plan_row(Point::new(200, 400), 9, mode, BuildTarget::Spire).is_err(),
-                "{mode:?}"
-            );
+        // The widest row each target can still place, in both single-row modes.
+        for mode in [RowMode::LeftToRight, RowMode::EndsInward] {
+            for target in BuildTarget::ALL {
+                assert!(plan_row(Point::new(160, 400), 12, mode, target).is_ok());
+                assert!(plan_row(Point::new(400, 400), 12, mode, target).is_err());
+            }
         }
     }
 
@@ -1641,10 +1642,10 @@ mod tests {
     }
 
     #[test]
-    fn a_spire_row_presses_v_s_and_spaces_the_orders_by_216() {
+    fn a_spire_row_presses_v_s_and_spaces_the_orders_by_144() {
         // The fake desktop is keyed on the build pair and on the target the
-        // run planned, so this pins the V,S order and the 216 px spacing, and
-        // its synthetic preview is painted at the Spire's 216 px size.
+        // run planned, so this pins the V,S order and the 144 px spacing, and
+        // its synthetic preview is painted at the Spire's 144 px size.
         let (fake, report) = run(3, BuildTarget::Spire);
         assert_eq!(report.outcome, Outcome::Completed);
         assert_eq!(report.target, BuildTarget::Spire);
@@ -1659,15 +1660,15 @@ mod tests {
             fake.orders(),
             vec![
                 Point::new(400, 400),
-                Point::new(616, 400),
-                Point::new(832, 400),
+                Point::new(544, 400),
+                Point::new(688, 400),
             ],
-            "spire footprint is 216 px wide"
+            "spire footprint is 144 px wide now"
         );
         assert_eq!(
             fake.events().join(" "),
             "save9(3) select(2) vs place(400,400) recall9(3) shift(2) save9(2) \
-             select(1) vs place(616,400) recall9(2) shift(1) save9(1) vs place(832,400)"
+             select(1) vs place(544,400) recall9(2) shift(1) save9(1) vs place(688,400)"
         );
         assert!(fake.held().is_empty(), "no key may stay held");
     }
@@ -1772,7 +1773,9 @@ mod tests {
 
     #[test]
     fn a_row_that_does_not_fit_is_refused_before_injecting_anything() {
-        for (count, target) in [(12, BuildTarget::Colony), (9, BuildTarget::Spire)] {
+        // From x=400 a twelve-building row (11 * 144 px) runs past the edge
+        // guard, for both targets, because they share the pitch.
+        for (count, target) in [(12, BuildTarget::Colony), (12, BuildTarget::Spire)] {
             let mut adapter = FakeDesktop::new(count);
             adapter.set_cursor(Point::new(400, 400));
             let cancel = adapter.cancel_flag();

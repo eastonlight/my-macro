@@ -506,8 +506,8 @@ target_process = "StarCraft.exe"
     #[test]
     fn defaults_are_the_documented_ones() {
         let config = Config::default();
-        assert_eq!(config.trigger_hotkey, HotkeyKey::F6);
-        assert_eq!(config.spire_action_hotkey, HotkeyKey::F7);
+        assert_eq!(config.trigger_hotkey, HotkeyKey::Tilde);
+        assert_eq!(config.spire_action_hotkey, HotkeyKey::Tab);
         assert_eq!(config.build_target, BuildTarget::Colony);
         assert_eq!(config.colony_row_mode, RowMode::LeftToRight);
         assert!(config.force_build, "the forced mode is the default");
@@ -900,24 +900,24 @@ target_process = "StarCraft.exe"
     }
 
     #[test]
-    fn the_default_trigger_is_f6_and_the_emergency_key_stays_f8() {
+    fn the_default_keys_are_tilde_and_tab_with_f8_reserved() {
         let config = Config::default();
-        assert_eq!(config.trigger_hotkey, HotkeyKey::F6);
-        assert_eq!(config.spire_action_hotkey, HotkeyKey::F7);
-        assert_eq!(config.bindings().get(HotkeySlot::Trigger), HotkeyKey::F6);
+        assert_eq!(config.trigger_hotkey, HotkeyKey::Tilde);
+        assert_eq!(config.spire_action_hotkey, HotkeyKey::Tab);
+        assert_eq!(config.bindings().get(HotkeySlot::Trigger), HotkeyKey::Tilde);
         assert_eq!(
             config.bindings().get(HotkeySlot::SpireAction),
-            HotkeyKey::F7
+            HotkeyKey::Tab
         );
         assert_eq!(config.bindings().emergency, HotkeyKey::F8);
         assert!(config.force_build, "the forced mode is the default");
     }
 
     #[test]
-    fn a_file_without_the_spire_action_key_gets_f7() {
+    fn a_file_without_the_spire_action_key_gets_the_default_action_key() {
         assert!(!SAMPLE.contains("spire_action_hotkey"), "{SAMPLE}");
         let config = Config::parse(SAMPLE).expect("an older file must still load");
-        assert_eq!(config.spire_action_hotkey, HotkeyKey::F7);
+        assert_eq!(config.spire_action_hotkey, HotkeyKey::Tab);
     }
 
     #[test]
@@ -931,7 +931,7 @@ target_process = "StarCraft.exe"
                 panic!("spire_scan_only = {value} must still load: {error}")
             });
             assert_eq!(config.trigger_hotkey, HotkeyKey::F6);
-            assert_eq!(config.spire_action_hotkey, HotkeyKey::F7);
+            assert_eq!(config.spire_action_hotkey, HotkeyKey::Tab);
             assert_eq!((config.press_ms, config.gap_ms), (50, 50));
             assert_eq!(config.build_target, BuildTarget::Colony);
             assert_eq!(config.colony_row_mode, RowMode::LeftToRight);
@@ -961,18 +961,18 @@ target_process = "StarCraft.exe"
         let reloaded = Config::parse(&saved).expect("parse the rewritten file");
         assert_eq!(reloaded, legacy);
         assert_eq!((reloaded.press_ms, reloaded.gap_ms), (50, 50));
-        assert_eq!(reloaded.spire_action_hotkey, HotkeyKey::F7);
+        assert_eq!(reloaded.spire_action_hotkey, HotkeyKey::Tab);
     }
 
     #[test]
-    fn a_row_trigger_on_f7_moves_the_absent_action_key_instead_of_rejecting_the_file() {
+    fn a_row_trigger_on_f7_keeps_the_file_valid_with_the_default_action_key() {
         // F7 used to be a valid row binding (the legacy `spire_hotkey`), so a
         // previously valid file must keep loading; the absent action key gets
-        // the next free default rather than failing validation.
+        // the normal default rather than failing validation.
         let text = SAMPLE.replace("trigger_hotkey = \"F6\"\n", "trigger_hotkey = \"F7\"\n");
         let config = Config::parse(&text).expect("previously valid file");
         assert_eq!(config.trigger_hotkey, HotkeyKey::F7);
-        assert_eq!(config.spire_action_hotkey, FALLBACK_SPIRE_ACTION_HOTKEY);
+        assert_eq!(config.spire_action_hotkey, HotkeyKey::Tab);
         assert_eq!(config.validate(), Ok(()));
     }
 
@@ -1008,7 +1008,7 @@ target_process = "StarCraft.exe"
         );
         let config = Config::parse(&text).expect("legacy file");
         assert_eq!(config.trigger_hotkey, HotkeyKey::F5);
-        assert_eq!(config.spire_action_hotkey, HotkeyKey::F7);
+        assert_eq!(config.spire_action_hotkey, HotkeyKey::Tab);
     }
 
     #[test]
@@ -1027,7 +1027,7 @@ target_process = "StarCraft.exe"
         let none = SAMPLE.replace("trigger_hotkey = \"F6\"\n", "");
         assert_eq!(
             Config::parse(&none).expect("no hotkey key").trigger_hotkey,
-            HotkeyKey::F6
+            HotkeyKey::Tilde
         );
     }
 }
