@@ -198,6 +198,9 @@ pub struct Labels {
     pub busy_note: &'static str,
 
     pub notes_heading: &'static str,
+    pub vacant_colony_sequence_label: &'static str,
+    pub vacant_colony_search_step_label: &'static str,
+    pub vacant_colony_caveat: &'static str,
     pub note_select_drone: &'static str,
     pub note_chat: &'static str,
     pub note_online: &'static str,
@@ -311,7 +314,10 @@ impl Labels {
             busy_note: "이미 실행 중입니다. 새 입력은 대기열에 쌓지 않고 무시합니다.",
 
             notes_heading: "사용 전 확인",
-            note_select_drone: "게임에서 드론을 2~12기 선택하고 지을 위치에 마우스를 둔 뒤 트리거 단축키를 누르세요. 커서 자리부터 오른쪽으로 한 줄로 지어집니다. 좌표는 저장하지 않습니다.",
+            vacant_colony_sequence_label: "한 번 실행",
+            vacant_colony_search_step_label: "빈자리 탐색·검증",
+            vacant_colony_caveat: "미리보기가 확인된 곳에만 클릭합니다(강행 없음). 게임에서 실기 검증 전이며, 화면 한 장만 탐색합니다.",
+            note_select_drone: "드론 2~12기를 선택한 뒤 트리거 단축키를 누르면 커서 자리부터 오른쪽으로 한 줄로 지어집니다. 실행키(기본 F5)는 게임의 F4 저장 화면으로 이동해 빈자리를 검증하며 지으므로, 먼저 게임에서 F4 화면을 지정해 두세요. 좌표는 저장하지 않습니다.",
             note_chat: "게임 채팅이나 입력 중에는 사용하지 마세요. 채팅 상태를 감지하지 못합니다.",
             note_online: "온라인/랭크/토너먼트 경기에서는 규정 위반이 될 수 있습니다. README를 먼저 확인하세요.",
             note_language_fallback: "한글 글꼴을 찾지 못해 영어로 표시합니다.",
@@ -424,7 +430,10 @@ impl Labels {
             busy_note: "Already running. New triggers are ignored, never queued.",
 
             notes_heading: "Before you use it",
-            note_select_drone: "Select 2-12 drones in the game, put the mouse on the build spot, then press the trigger key: they build in a row to the right. No coordinate is stored.",
+            vacant_colony_sequence_label: "one run",
+            vacant_colony_search_step_label: "probe and verify free space",
+            vacant_colony_caveat: "Clicks only where a fresh preview is confirmed (no forced clicks). Not live-validated in game yet; it searches a single screen.",
+            note_select_drone: "Select 2-12 drones, then press the trigger key to build a row to the right of the cursor. The third key (default F5) recalls the game's saved F4 view and only builds on verified free space, so save that view in game first. No coordinate is stored.",
             note_chat: "Do not use while typing in game chat: chat state is not detected.",
             note_online: "May violate online/ranked/tournament rules. Read the README first.",
             note_language_fallback: "No Korean font was found, showing English.",
@@ -460,7 +469,80 @@ impl Labels {
             HotkeySlot::Trigger => self.hotkey_slot_trigger,
             HotkeySlot::SpireAction => self.hotkey_slot_spire_action,
             HotkeySlot::Emergency => self.hotkey_slot_emergency,
+            HotkeySlot::VacantColony => self.vacant_colony_title(),
         }
+    }
+
+    pub fn vacant_colony_title(&self) -> &'static str {
+        match self.lang {
+            Lang::Korean => "F4 빈자리 크립 콜로니",
+            Lang::English => "F4 vacant-space Colonies",
+        }
+    }
+
+    pub fn vacant_colony_hint(&self) -> &'static str {
+        match self.lang {
+            Lang::Korean => {
+                "크립과 여유 공간이 있는 화면을 게임의 F4에 미리 저장하세요. 드론 2~12기 선택 → 실행키 → F4 이동 → 초록 미리보기 확인 후 건설 명령. 그룹 9 사용 · 강행 없음 · 같은 타이밍 사용. F4는 실행키로 지정할 수 없습니다. 빈자리 탐색은 최대 45초, 실기 검증 전입니다."
+            }
+            Lang::English => {
+                "Save a view with creep and free space to in-game F4 first. Select 2–12 drones, then trigger: F4 → probe → verified green preview → Colony order. Uses group 9 and shared timing; never forces placement. F4 stays reserved for the game. Search budget: 45s. Not live-validated yet."
+            }
+        }
+    }
+
+    pub fn vacant_colony_result(
+        &self,
+        report: &crate::vacant_colony::VacantColonyReport,
+    ) -> (NoticeLevel, String) {
+        let (level, state, detail) = match &report.outcome {
+            Outcome::Completed => (
+                NoticeLevel::Ok,
+                match self.lang {
+                    Lang::Korean => "명령 전송 완료",
+                    Lang::English => "orders sent",
+                },
+                "",
+            ),
+            Outcome::Cancelled => (
+                NoticeLevel::Info,
+                match self.lang {
+                    Lang::Korean => "취소",
+                    Lang::English => "cancelled",
+                },
+                "",
+            ),
+            Outcome::Aborted { detail } | Outcome::Failed { detail } => (
+                NoticeLevel::Err,
+                match self.lang {
+                    Lang::Korean => "중단",
+                    Lang::English => "stopped",
+                },
+                detail.as_str(),
+            ),
+        };
+        let progress = match self.lang {
+            Lang::Korean => format!(
+                "명령 {}/{} · 검사 {}곳 · 건설 완료 수 아님",
+                report.orders.len(),
+                report.detected,
+                report.probes
+            ),
+            Lang::English => format!(
+                "{}/{} orders, {} probes (not completed buildings)",
+                report.orders.len(),
+                report.detected,
+                report.probes
+            ),
+        };
+        (
+            level,
+            format!(
+                "{}: {state} · {progress} {}",
+                self.vacant_colony_title(),
+                detail
+            ),
+        )
     }
 
     pub fn steps(&self, done: usize, total: usize) -> String {
@@ -736,6 +818,7 @@ mod tests {
     use super::*;
     use crate::engine::Outcome;
     use crate::hotkey::HotkeyKey;
+    use crate::vacant_colony::VacantColonyReport;
 
     fn contains_hangul(text: &str) -> bool {
         text.chars().any(|c| {
@@ -1359,6 +1442,84 @@ mod tests {
             );
             assert_eq!(labels.spire_positions(&[]), "");
         }
+    }
+
+    #[test]
+    fn the_third_feature_hint_names_the_recall_key_and_the_limits() {
+        for labels in [Labels::korean(), Labels::english()] {
+            let hint = labels.vacant_colony_hint();
+            assert!(hint.contains("F4"), "{hint}");
+            assert!(hint.contains("2") && hint.contains("12"), "{hint}");
+            assert!(!labels.vacant_colony_title().is_empty());
+        }
+        let korean = Labels::korean();
+        let english = Labels::english();
+        assert_ne!(korean.vacant_colony_hint(), english.vacant_colony_hint());
+        assert_ne!(korean.vacant_colony_title(), english.vacant_colony_title());
+        // The key the feature presses must be named, and the fact that the
+        // search is not live-validated must survive in both languages.
+        assert!(
+            korean
+                .vacant_colony_hint()
+                .contains("F4는 실행키로 지정할 수 없습니다")
+        );
+        assert!(
+            english
+                .vacant_colony_hint()
+                .contains("F4 stays reserved for the game")
+        );
+        assert!(english.vacant_colony_hint().contains("Not live-validated"));
+    }
+
+    #[test]
+    fn the_third_feature_result_never_claims_completed_buildings() {
+        let report =
+            |outcome: Outcome, orders: usize, detected: u8, probes: usize| VacantColonyReport {
+                outcome,
+                detected,
+                orders: vec![Point::new(900, 400); orders],
+                probes,
+            };
+
+        let labels = Labels::korean();
+        let (level, text) = labels.vacant_colony_result(&report(Outcome::Completed, 3, 4, 12));
+        assert_eq!(level, NoticeLevel::Ok);
+        assert!(text.contains("3/4"), "{text}");
+        assert!(text.contains("12"), "{text}");
+        assert!(
+            text.contains("건설 완료 수 아님"),
+            "an issued order is not a finished building: {text}"
+        );
+
+        let (level, text) = labels.vacant_colony_result(&report(Outcome::Cancelled, 1, 4, 30));
+        assert_eq!(level, NoticeLevel::Info, "a partial run is not a success");
+        assert!(text.contains("1/4"), "{text}");
+
+        let (level, text) = labels.vacant_colony_result(&report(
+            Outcome::Aborted {
+                detail: "the F4 view changed; refusing stale screen coordinates".to_owned(),
+            },
+            0,
+            4,
+            7,
+        ));
+        assert_eq!(level, NoticeLevel::Err);
+        assert!(
+            text.contains("stale screen coordinates"),
+            "the English detail must survive: {text}"
+        );
+
+        let (english_level, english_text) =
+            Labels::english().vacant_colony_result(&report(Outcome::Cancelled, 1, 4, 30));
+        assert_eq!(
+            english_level,
+            NoticeLevel::Info,
+            "the same outcome must get the same level in both languages"
+        );
+        assert!(
+            english_text.contains("not completed buildings"),
+            "{english_text}"
+        );
     }
 
     #[test]

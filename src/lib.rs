@@ -29,6 +29,7 @@ pub mod runner;
 pub mod spire_action;
 pub mod spire_vision;
 pub mod ui_text;
+pub mod vacant_colony;
 pub mod vision;
 
 #[cfg(windows)]

@@ -8,6 +8,14 @@
 #[path = "colony.rs"]
 mod inner;
 
+/// Shared guarded primitives; the F4 feature bypasses only the row-count cap,
+/// not selection verification, cancellation or owned-input cleanup.
+pub(crate) mod controls {
+    pub(crate) use super::inner::{
+        chord, click, expect_count, expect_recall, expect_single, guard, shift_click, tap, wait,
+    };
+}
+
 pub use inner::{
     CAPTURE_TIMEOUT, ColonyReport, EDGE_MARGIN, HUD_TOP, RowError, RowMode, RowPlan, SNAP_SLACK,
     plan_row,

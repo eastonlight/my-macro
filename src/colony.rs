@@ -467,15 +467,19 @@ fn failed(error: InputError) -> Outcome {
 /// Runs the adapter's safety gate before an injected event. The engine does
 /// this for plan-based macros; the colony row calls the adapter directly, so it
 /// must do the same before every key press and click.
-fn guard(adapter: &mut dyn DesktopAdapter, cancel: &AtomicBool) -> Result<(), Outcome> {
+pub(crate) fn guard(adapter: &mut dyn DesktopAdapter, cancel: &AtomicBool) -> Result<(), Outcome> {
     if cancel.load(Ordering::SeqCst) {
         return Err(Outcome::Cancelled);
     }
-    adapter.safety_check().map_err(failed)
+    adapter.safety_check().map_err(failed)?;
+    if cancel.load(Ordering::SeqCst) {
+        return Err(Outcome::Cancelled);
+    }
+    Ok(())
 }
 
 /// Injectable key hold / gap, polled for cancellation.
-fn wait(duration: Duration, cancel: &AtomicBool) -> Result<(), Outcome> {
+pub(crate) fn wait(duration: Duration, cancel: &AtomicBool) -> Result<(), Outcome> {
     let deadline = Instant::now() + duration;
     while Instant::now() < deadline {
         if cancel.load(Ordering::SeqCst) {
@@ -487,7 +491,7 @@ fn wait(duration: Duration, cancel: &AtomicBool) -> Result<(), Outcome> {
     Ok(())
 }
 
-fn tap(
+pub(crate) fn tap(
     adapter: &mut dyn DesktopAdapter,
     cancel: &AtomicBool,
     timing: Timing,
@@ -503,7 +507,7 @@ fn tap(
 
 /// Ctrl+9-style chord. The modifier is pressed first and released last, and
 /// the adapter owns it, so the user's own modifiers still block injection.
-fn chord(
+pub(crate) fn chord(
     adapter: &mut dyn DesktopAdapter,
     cancel: &AtomicBool,
     timing: Timing,
@@ -524,7 +528,7 @@ fn chord(
     wait(timing.gap, cancel)
 }
 
-fn click(
+pub(crate) fn click(
     adapter: &mut dyn DesktopAdapter,
     cancel: &AtomicBool,
     timing: Timing,
@@ -538,7 +542,7 @@ fn click(
 }
 
 /// Shift-click removes one portrait from the current selection.
-fn shift_click(
+pub(crate) fn shift_click(
     adapter: &mut dyn DesktopAdapter,
     cancel: &AtomicBool,
     timing: Timing,
@@ -569,7 +573,9 @@ fn await_selection(
         if cancel.load(Ordering::SeqCst) {
             return Err(Outcome::Cancelled);
         }
+        guard(adapter, cancel)?;
         let frame = adapter.capture_client().map_err(failed)?;
+        guard(adapter, cancel)?;
         let read = vision::detect_selection(&frame);
         if accept(&read) {
             return Ok(read);
@@ -587,7 +593,7 @@ fn await_selection(
 }
 
 /// After a portrait click the HUD must show exactly one selected drone.
-fn expect_single(
+pub(crate) fn expect_single(
     adapter: &mut dyn DesktopAdapter,
     cancel: &AtomicBool,
     timing: Timing,
@@ -601,7 +607,7 @@ fn expect_single(
 
 /// After recalling group 9 the live count must be `pool` or `pool - 1`
 /// (`pool == 2` may legitimately collapse to the single information panel).
-fn expect_recall(
+pub(crate) fn expect_recall(
     adapter: &mut dyn DesktopAdapter,
     cancel: &AtomicBool,
     timing: Timing,
@@ -620,7 +626,7 @@ fn expect_recall(
 }
 
 /// After removing the travelling drone the pool must be exactly `count`.
-fn expect_count(
+pub(crate) fn expect_count(
     adapter: &mut dyn DesktopAdapter,
     cancel: &AtomicBool,
     timing: Timing,

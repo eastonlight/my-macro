@@ -32,6 +32,11 @@ pub const DEFAULT_TRIGGER_HOTKEY: HotkeyKey = HotkeyKey::Tilde;
 
 /// Default key for the Spire action (scan, click, verified `A`).
 pub const DEFAULT_SPIRE_ACTION_HOTKEY: HotkeyKey = HotkeyKey::Tab;
+pub const DEFAULT_VACANT_COLONY_HOTKEY: HotkeyKey = HotkeyKey::F5;
+
+fn default_vacant_colony_hotkey(trigger: HotkeyKey, action: HotkeyKey) -> HotkeyKey {
+    Bindings::new(trigger, action).vacant_colony
+}
 
 /// Fallback used when the configured row trigger already occupies the Spire
 /// action's default key: a previously valid file must keep loading instead of
@@ -67,6 +72,8 @@ pub struct Config {
     /// `spire_scan_only` key load as usual — the legacy key is parsed and
     /// ignored, never turned into a setting.
     pub spire_action_hotkey: HotkeyKey,
+    /// F4 saved-view Colony search. F4 itself stays available to the game.
+    pub vacant_colony_hotkey: HotkeyKey,
     /// Which building the row-build macro orders.
     pub build_target: BuildTarget,
     /// Order in which the row's footprints are built. The span (cursor =
@@ -88,6 +95,7 @@ impl Default for Config {
         Self {
             trigger_hotkey: DEFAULT_TRIGGER_HOTKEY,
             spire_action_hotkey: default_spire_action_hotkey(DEFAULT_TRIGGER_HOTKEY),
+            vacant_colony_hotkey: DEFAULT_VACANT_COLONY_HOTKEY,
             build_target: BuildTarget::default(),
             colony_row_mode: RowMode::default(),
             force_build: true,
@@ -165,6 +173,28 @@ impl Config {
                 self.trigger_hotkey
             )));
         }
+        for (field, key) in [
+            ("trigger_hotkey", self.trigger_hotkey),
+            ("spire_action_hotkey", self.spire_action_hotkey),
+            ("vacant_colony_hotkey", self.vacant_colony_hotkey),
+        ] {
+            if key == HotkeyKey::F4 {
+                return Err(ConfigError::Invalid(format!(
+                    "{field}: F4 is reserved for the game's saved camera view"
+                )));
+            }
+        }
+        if [
+            EMERGENCY_HOTKEY,
+            self.trigger_hotkey,
+            self.spire_action_hotkey,
+        ]
+        .contains(&self.vacant_colony_hotkey)
+        {
+            return Err(ConfigError::Invalid(
+                "vacant_colony_hotkey must differ from the other hotkeys and F8".to_owned(),
+            ));
+        }
         validate_target_process(&self.target_process)?;
         Ok(())
     }
@@ -182,6 +212,7 @@ impl Config {
 
     pub fn bindings(&self) -> Bindings {
         Bindings::new(self.trigger_hotkey, self.spire_action_hotkey)
+            .with_vacant_colony(self.vacant_colony_hotkey)
     }
 
     /// Parses one settings file, migrating the legacy shared timing if present.
@@ -270,6 +301,8 @@ struct SettingsFile {
     /// existed; [`SettingsFile::into_config`] then picks a free default.
     #[serde(default)]
     spire_action_hotkey: Option<HotkeyKey>,
+    #[serde(default)]
+    vacant_colony_hotkey: Option<HotkeyKey>,
     /// Removed key, accepted only so an older file still loads.
     ///
     /// Files written while the preview-only mode existed store
@@ -383,7 +416,18 @@ impl SettingsFile {
             }
         };
 
+        let trigger = self
+            .trigger_hotkey
+            .or(self.colony_hotkey)
+            .or(self.spire_hotkey)
+            .unwrap_or(DEFAULT_TRIGGER_HOTKEY);
+        let action = self
+            .spire_action_hotkey
+            .unwrap_or_else(|| default_spire_action_hotkey(trigger));
         Ok(Config {
+            vacant_colony_hotkey: self
+                .vacant_colony_hotkey
+                .unwrap_or_else(|| default_vacant_colony_hotkey(trigger, action)),
             trigger_hotkey: self
                 .trigger_hotkey
                 .or(self.colony_hotkey)
@@ -485,9 +529,10 @@ target_process = "StarCraft.exe"
     /// `spire_scan_only` is deliberately absent: the key is read from older
     /// files but never written again, so a removed feature cannot come back
     /// through a saved file.
-    const WRITTEN_KEYS: [&str; 8] = [
+    const WRITTEN_KEYS: [&str; 9] = [
         "trigger_hotkey",
         "spire_action_hotkey",
+        "vacant_colony_hotkey",
         "build_target",
         "colony_row_mode",
         "force_build",
@@ -508,6 +553,7 @@ target_process = "StarCraft.exe"
         let config = Config::default();
         assert_eq!(config.trigger_hotkey, HotkeyKey::Tilde);
         assert_eq!(config.spire_action_hotkey, HotkeyKey::Tab);
+        assert_eq!(config.vacant_colony_hotkey, HotkeyKey::F5);
         assert_eq!(config.build_target, BuildTarget::Colony);
         assert_eq!(config.colony_row_mode, RowMode::LeftToRight);
         assert!(config.force_build, "the forced mode is the default");
@@ -556,6 +602,7 @@ target_process = "StarCraft.exe"
         let config = Config {
             trigger_hotkey: HotkeyKey::F11,
             spire_action_hotkey: HotkeyKey::F12,
+            vacant_colony_hotkey: HotkeyKey::F9,
             build_target: BuildTarget::Spire,
             colony_row_mode: RowMode::EndsInward,
             force_build: false,
@@ -909,6 +956,10 @@ target_process = "StarCraft.exe"
             config.bindings().get(HotkeySlot::SpireAction),
             HotkeyKey::Tab
         );
+        assert_eq!(
+            config.bindings().get(HotkeySlot::VacantColony),
+            HotkeyKey::F5
+        );
         assert_eq!(config.bindings().emergency, HotkeyKey::F8);
         assert!(config.force_build, "the forced mode is the default");
     }
@@ -974,6 +1025,80 @@ target_process = "StarCraft.exe"
         assert_eq!(config.trigger_hotkey, HotkeyKey::F7);
         assert_eq!(config.spire_action_hotkey, HotkeyKey::Tab);
         assert_eq!(config.validate(), Ok(()));
+    }
+
+    #[test]
+    fn the_third_key_defaults_to_f5_and_moves_out_of_the_way() {
+        // An older file without the key gets the free default.
+        let config = Config::parse(SAMPLE).expect("older file");
+        assert_eq!(config.vacant_colony_hotkey, HotkeyKey::F5);
+        assert_eq!(config.validate(), Ok(()));
+
+        // If F5 is already taken by another binding, the default moves to the
+        // next free F-key instead of making the file invalid.
+        let text = SAMPLE.replace("trigger_hotkey = \"F6\"\n", "trigger_hotkey = \"F5\"\n");
+        let config = Config::parse(&text).expect("previously valid file");
+        assert_eq!(config.trigger_hotkey, HotkeyKey::F5);
+        assert_eq!(config.vacant_colony_hotkey, HotkeyKey::F6);
+        assert_eq!(config.validate(), Ok(()));
+
+        // A file that already names the key keeps exactly that key.
+        let text = format!("{SAMPLE}vacant_colony_hotkey = \"F11\"\n");
+        assert_eq!(
+            Config::parse(&text)
+                .expect("explicit key")
+                .vacant_colony_hotkey,
+            HotkeyKey::F11
+        );
+    }
+
+    #[test]
+    fn the_game_s_f4_view_key_can_never_be_bound() {
+        // F4 belongs to the game's saved camera view; every binding rejects it.
+        for config in [
+            Config {
+                trigger_hotkey: HotkeyKey::F4,
+                ..Config::default()
+            },
+            Config {
+                spire_action_hotkey: HotkeyKey::F4,
+                ..Config::default()
+            },
+            Config {
+                vacant_colony_hotkey: HotkeyKey::F4,
+                ..Config::default()
+            },
+        ] {
+            let error = config.validate().expect_err("F4 must be rejected");
+            assert!(error.to_string().contains("F4"), "{error}");
+        }
+        // F4 is still offered by the GUI's key list so the rejection is
+        // reachable and visible, not silently impossible.
+        assert!(HotkeyKey::ALL.contains(&HotkeyKey::F4));
+    }
+
+    #[test]
+    fn the_third_key_must_differ_from_the_other_two_and_from_f8() {
+        for key in [HotkeyKey::Tilde, HotkeyKey::Tab, HotkeyKey::EMERGENCY] {
+            let config = Config {
+                trigger_hotkey: HotkeyKey::Tilde,
+                spire_action_hotkey: HotkeyKey::Tab,
+                vacant_colony_hotkey: key,
+                ..Config::default()
+            };
+            let error = config.validate().expect_err("duplicate must be rejected");
+            assert!(
+                error.to_string().contains("vacant_colony_hotkey"),
+                "{error}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_third_key_is_written_and_read_back() {
+        let text = Config::default().to_toml().expect("serialize");
+        assert!(text.contains("vacant_colony_hotkey = \"F5\""), "{text}");
+        assert_eq!(written_keys(&text), WRITTEN_KEYS.to_vec(), "{text}");
     }
 
     #[test]

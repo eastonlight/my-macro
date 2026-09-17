@@ -22,6 +22,7 @@ use crate::hotkey::HotkeySlot;
 use crate::input::{DesktopAdapter, InputAdapter};
 use crate::macros::{BuildTarget, MacroId, Timing};
 use crate::spire_action::{self, SpireActionReport, SpireScanError, SpireScanReport};
+use crate::vacant_colony::{self, VacantColonyReport};
 
 /// What a registered hotkey does while the app is armed.
 ///
@@ -34,6 +35,7 @@ pub enum HotkeyAction {
     StartRowBuild,
     /// Start the Spire action (scan, click each crown, verified `A`).
     StartSpireAction,
+    StartVacantColony,
     /// Stop the running macro immediately.
     EmergencyStop,
 }
@@ -43,6 +45,7 @@ pub const fn action_for(slot: HotkeySlot) -> HotkeyAction {
     match slot {
         HotkeySlot::Trigger => HotkeyAction::StartRowBuild,
         HotkeySlot::SpireAction => HotkeyAction::StartSpireAction,
+        HotkeySlot::VacantColony => HotkeyAction::StartVacantColony,
         HotkeySlot::Emergency => HotkeyAction::EmergencyStop,
     }
 }
@@ -74,6 +77,7 @@ impl std::error::Error for StartError {}
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct FinishedReports {
     pub row: Option<RunReport>,
+    pub vacant_colony: Option<VacantColonyReport>,
     pub spire_action: Option<SpireActionReport>,
     pub spire_scan: Option<Result<SpireScanReport, SpireScanError>>,
 }
@@ -81,7 +85,10 @@ pub struct FinishedReports {
 impl FinishedReports {
     /// True when nothing had finished.
     pub const fn is_empty(&self) -> bool {
-        self.row.is_none() && self.spire_action.is_none() && self.spire_scan.is_none()
+        self.row.is_none()
+            && self.spire_action.is_none()
+            && self.spire_scan.is_none()
+            && self.vacant_colony.is_none()
     }
 }
 
@@ -91,6 +98,8 @@ pub struct MacroRunner {
     worker: Option<JoinHandle<()>>,
     reports: Receiver<RunReport>,
     report_sender: Sender<RunReport>,
+    vacant_reports: Receiver<VacantColonyReport>,
+    vacant_sender: Sender<VacantColonyReport>,
     spire_reports: Receiver<SpireActionReport>,
     spire_report_sender: Sender<SpireActionReport>,
     spire_scan_reports: Receiver<Result<SpireScanReport, SpireScanError>>,
@@ -100,6 +109,7 @@ pub struct MacroRunner {
 impl MacroRunner {
     pub fn new() -> Self {
         let (report_sender, reports) = std::sync::mpsc::channel();
+        let (vacant_sender, vacant_reports) = std::sync::mpsc::channel();
         let (spire_report_sender, spire_reports) = std::sync::mpsc::channel();
         let (spire_scan_report_sender, spire_scan_reports) = std::sync::mpsc::channel();
         Self {
@@ -107,6 +117,8 @@ impl MacroRunner {
             worker: None,
             reports,
             report_sender,
+            vacant_sender,
+            vacant_reports,
             spire_reports,
             spire_report_sender,
             spire_scan_reports,
@@ -185,6 +197,39 @@ impl MacroRunner {
                 let mut adapter = adapter;
                 let report =
                     row_build_guarded(adapter.as_mut(), &cancel, timing, mode, target, force);
+                let _ = sender.send(report);
+            })
+            .map_err(|error| StartError::Thread {
+                detail: error.to_string(),
+            })?;
+        self.worker = Some(handle);
+        Ok(())
+    }
+
+    /// The third feature shares the worker slot and the latched F8 flag.
+    pub fn try_start_vacant_colony(
+        &mut self,
+        timing: Timing,
+        adapter: Box<dyn DesktopAdapter>,
+    ) -> Result<(), StartError> {
+        if self.worker.is_some() {
+            return Err(StartError::Busy);
+        }
+        let cancel = Arc::clone(&self.cancel);
+        let sender = self.vacant_sender.clone();
+        let handle = thread::Builder::new()
+            .name("oh-my-macro-vacant-colony".to_owned())
+            .spawn(move || {
+                let mut adapter = adapter;
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    vacant_colony::run(adapter.as_mut(), &cancel, timing)
+                }));
+                let report = result.unwrap_or_else(|_| {
+                    let cleanup = adapter.release_all();
+                    VacantColonyReport::failed(format!(
+                        "internal panic during F4 Colony placement; cleanup: {cleanup:?}"
+                    ))
+                });
                 let _ = sender.send(report);
             })
             .map_err(|error| StartError::Thread {
@@ -288,6 +333,7 @@ impl MacroRunner {
     pub fn drain_finished(&mut self) -> FinishedReports {
         FinishedReports {
             row: self.poll_report(),
+            vacant_colony: self.poll_vacant_colony_report(),
             spire_action: self.poll_spire_report(),
             spire_scan: self.poll_spire_scan_report(),
         }
@@ -335,6 +381,16 @@ impl MacroRunner {
                 Some(report)
             }
             Err(TryRecvError::Empty) | Err(TryRecvError::Disconnected) => None,
+        }
+    }
+
+    pub fn poll_vacant_colony_report(&mut self) -> Option<VacantColonyReport> {
+        match self.vacant_reports.try_recv() {
+            Ok(report) => {
+                self.join_worker();
+                Some(report)
+            }
+            Err(TryRecvError::Empty | TryRecvError::Disconnected) => None,
         }
     }
 
@@ -1215,6 +1271,94 @@ mod tests {
     }
 
     #[test]
+    fn the_third_feature_shares_the_one_worker_slot_and_reports_once() {
+        use crate::vacant_colony::tests::Desktop as VacantDesktop;
+
+        let mut runner = MacroRunner::new();
+        // The worker blocks inside the second, frozen preview frame; F8 is
+        // latched from the test thread, so the run is cancelled while it still
+        // holds a verified candidate. It must stop without a world click.
+        let gate = Arc::new(Gate::default());
+        let fake = VacantDesktop::new(2).hold_capture(7, Arc::clone(&gate));
+        runner
+            .try_start_vacant_colony(spyre_timing(), Box::new(fake))
+            .unwrap();
+        // A second trigger is rejected, never queued, while the slot is busy.
+        assert_eq!(
+            runner.try_start_vacant_colony(spyre_timing(), Box::new(VacantDesktop::new(2))),
+            Err(StartError::Busy)
+        );
+        assert!(gate.wait_until_entered(1), "the F4 worker never started");
+        runner.request_cancel();
+        gate.open();
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let finished = loop {
+            let finished = runner.drain_finished();
+            if !finished.is_empty() {
+                break finished;
+            }
+            assert!(Instant::now() < deadline, "no F4 report within 5s");
+            thread::sleep(Duration::from_millis(1));
+        };
+        let report = finished.vacant_colony.expect("the F4 report");
+        assert_eq!(report.outcome, Outcome::Cancelled);
+        assert!(report.orders.is_empty());
+        // Cancelled (not Failed) also means the owned-input release succeeded.
+        assert!(!runner.is_running(), "the slot is free again");
+    }
+
+    #[test]
+    fn a_latched_cancel_stops_the_third_feature_before_it_touches_the_game() {
+        use crate::vacant_colony::tests::Desktop as VacantDesktop;
+
+        let mut runner = MacroRunner::new();
+        runner.request_cancel();
+        runner
+            .try_start_vacant_colony(spyre_timing(), Box::new(VacantDesktop::new(3)))
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let report = loop {
+            if let Some(report) = runner.poll_vacant_colony_report() {
+                break report;
+            }
+            assert!(Instant::now() < deadline, "no F4 report within 5s");
+            thread::sleep(Duration::from_millis(1));
+        };
+        assert_eq!(report.outcome, Outcome::Cancelled);
+        assert!(report.orders.is_empty());
+    }
+
+    #[test]
+    fn a_panicking_third_feature_still_releases_injected_input() {
+        use crate::vacant_colony::tests::Desktop as VacantDesktop;
+
+        let mut runner = MacroRunner::new();
+        let mut fake = VacantDesktop::new(2);
+        fake.panic_capture = true;
+        runner
+            .try_start_vacant_colony(spyre_timing(), Box::new(fake))
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let report = loop {
+            if let Some(report) = runner.poll_vacant_colony_report() {
+                break report;
+            }
+            assert!(Instant::now() < deadline, "no F4 report within 5s");
+            thread::sleep(Duration::from_millis(1));
+        };
+        let Outcome::Failed { detail } = &report.outcome else {
+            panic!("expected a failed report, got {:?}", report.outcome);
+        };
+        assert!(detail.contains("internal panic"), "{detail}");
+        assert!(
+            detail.contains("cleanup: Ok"),
+            "input was not released: {detail}"
+        );
+        assert!(report.orders.is_empty());
+    }
+
+    #[test]
     fn the_trigger_starts_the_row_build_and_f8_stops_it() {
         // The GUI routes both through this pure rule, so the macro can never
         // be split across bindings again.
@@ -1236,6 +1380,7 @@ mod tests {
             let expected = match slot {
                 HotkeySlot::Trigger => HotkeyAction::StartRowBuild,
                 HotkeySlot::SpireAction => HotkeyAction::StartSpireAction,
+                HotkeySlot::VacantColony => HotkeyAction::StartVacantColony,
                 HotkeySlot::Emergency => HotkeyAction::EmergencyStop,
             };
             assert_eq!(action_for(slot), expected, "{slot:?}");

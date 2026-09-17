@@ -33,11 +33,13 @@ pub enum Key {
     /// `A`, the one action key the Spire action presses after a verified crown
     /// selection. Never sent before the selection panel confirms the Spire.
     A,
+    /// Recall the user's saved camera location; never combined with Shift.
+    F4,
 }
 
 impl Key {
     /// Every key this tool may press, used when releasing held input.
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 10] = [
         Self::B,
         Self::C,
         Self::V,
@@ -47,6 +49,7 @@ impl Key {
         Self::Nine,
         Self::Escape,
         Self::A,
+        Self::F4,
     ];
 
     /// Set 1 ("XT") hardware scan code, the value `SendInput` expects together
@@ -65,6 +68,7 @@ impl Key {
             Self::Nine => 0x0A,
             Self::Escape => 0x01,
             Self::A => 0x1E,
+            Self::F4 => 0x3E,
         }
     }
 
@@ -80,6 +84,7 @@ impl Key {
             Self::Nine => "9",
             Self::Escape => "Esc",
             Self::A => "A",
+            Self::F4 => "F4",
         }
     }
 }
@@ -403,11 +408,14 @@ mod tests {
         assert_eq!(Key::Shift.scan_code(), 0x2A);
         assert_eq!(Key::Nine.scan_code(), 0x0A);
         assert_eq!(Key::A.scan_code(), 0x1E);
+        assert_eq!(Key::F4.scan_code(), 0x3E, "F4 recalls the saved view");
+        assert_eq!(Key::Escape.scan_code(), 0x01);
     }
 
     #[test]
     fn all_keys_are_covered_by_the_release_list() {
-        assert_eq!(Key::ALL.len(), 9);
+        assert_eq!(Key::ALL.len(), 10);
+        assert!(Key::ALL.contains(&Key::F4), "the third feature presses F4");
         for key in Key::ALL {
             assert!(!key.name().is_empty());
         }

@@ -30,6 +30,12 @@ use crate::runner::{FinishedReports, HotkeyAction, MacroRunner, action_for};
 use crate::ui_text::{Labels, Lang, NoticeLevel, SpirePreview, run_notice_level};
 
 /// Repaint interval so "running/idle" stays current.
+/// Muted label colour shared by the cards' secondary text.
+const MUTED: Color32 = Color32::from_rgb(0x64, 0x74, 0x8b);
+/// Separator drawn between the keycaps of one sequence row.
+const ARROW: &str = "\u{2192}";
+/// Amber warning glyph used by the caveat lines.
+const CAVEAT: &str = "\u{26a0}";
 const HEARTBEAT: Duration = Duration::from_millis(120);
 /// How often the foreground process is probed for the safety display.
 const DIAGNOSTICS_REFRESH: Duration = Duration::from_millis(500);
@@ -89,6 +95,7 @@ enum ActiveRun {
     /// `A` per verified selection. There is no separate read-only pass any
     /// more, so the action key only ever starts this run.
     SpireAction,
+    VacantColony,
 }
 
 /// One status line plus the level that decides how it is drawn.
@@ -266,6 +273,7 @@ impl MacroApp {
         match action_for(slot) {
             HotkeyAction::StartRowBuild => self.start_row_build(),
             HotkeyAction::StartSpireAction => self.start_spire_action(),
+            HotkeyAction::StartVacantColony => self.start_vacant_colony(),
             HotkeyAction::EmergencyStop => self.disarm(Some(self.labels.status_emergency)),
         }
     }
@@ -326,6 +334,24 @@ impl MacroApp {
         }
     }
 
+    fn start_vacant_colony(&mut self) {
+        if !self.armed {
+            self.set_notice(NoticeLevel::Info, self.labels.status_not_armed);
+            return;
+        }
+        let adapter = SendInputAdapter::new(&self.config.target_process);
+        match self
+            .runner
+            .try_start_vacant_colony(self.config.timing(), Box::new(adapter))
+        {
+            Ok(()) => {
+                self.running = Some(ActiveRun::VacantColony);
+                self.notice = None;
+            }
+            Err(error) => self.set_notice(NoticeLevel::Info, self.labels.start_error(error)),
+        }
+    }
+
     fn save_config(&mut self) {
         match self.config.save(&self.config_path) {
             Ok(()) => {
@@ -379,6 +405,10 @@ impl MacroApp {
     fn apply_finished(&mut self, finished: FinishedReports) {
         if finished.is_empty() {
             return;
+        }
+        if let Some(report) = &finished.vacant_colony {
+            let (level, text) = self.labels.vacant_colony_result(report);
+            self.set_notice(level, text);
         }
         if let Some(report) = &finished.row {
             self.set_notice(run_notice_level(report), self.labels.outcome(report));
@@ -459,6 +489,8 @@ impl eframe::App for MacroApp {
                         self.render_row_build_card(ui, &labels);
                         ui.add_space(10.0);
                         self.render_spire_action_card(ui, &labels);
+                        ui.add_space(10.0);
+                        self.render_vacant_colony_card(ui, &labels);
                         ui.add_space(10.0);
                         self.render_advanced_section(ui, &labels);
                     });
@@ -673,6 +705,83 @@ impl MacroApp {
             running,
             self.spire_preview.as_ref(),
         );
+    }
+
+    fn render_vacant_colony_card(&mut self, ui: &mut egui::Ui, labels: &Labels) {
+        Frame::new()
+            .fill(Color32::from_rgb(0x22, 0x1c, 0x12))
+            .stroke(Stroke::new(1.0, Color32::from_rgb(0x65, 0x4b, 0x22)))
+            .corner_radius(CornerRadius::same(8))
+            .inner_margin(Margin::same(12))
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new(labels.vacant_colony_title())
+                            .strong()
+                            .size(14.0)
+                            .color(Color32::from_rgb(0xfb, 0xbf, 0x24)),
+                    );
+                    if self.running == Some(ActiveRun::VacantColony) {
+                        ui.spinner();
+                        ui.label(labels.status_running);
+                    }
+                });
+                // What one run sends, so the card cannot be mistaken for the
+                // row build: recall the saved view, probe, then order.
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new(labels.vacant_colony_sequence_label)
+                            .size(11.0)
+                            .color(Color32::from_rgb(0x94, 0xa3, 0xb8)),
+                    );
+                    render_keycap(ui, Key::F4.name(), false);
+                    ui.label(RichText::new(ARROW).color(MUTED));
+                    ui.label(
+                        RichText::new(labels.vacant_colony_search_step_label)
+                            .size(11.0)
+                            .color(Color32::from_rgb(0xfb, 0xbf, 0x24)),
+                    );
+                    ui.label(RichText::new(ARROW).color(MUTED));
+                    render_keycap(ui, Key::B.name(), false);
+                    render_keycap(ui, Key::C.name(), false);
+                    render_keycap(ui, labels.mouse_click_label, true);
+                });
+                ui.label(RichText::new(labels.vacant_colony_hint()).size(11.0));
+                // Amber: this path never forces a click, and it is not
+                // live-validated in game yet.
+                ui.label(
+                    RichText::new(format!("{} {}", CAVEAT, labels.vacant_colony_caveat))
+                        .size(10.0)
+                        .color(Color32::from_rgb(0xfb, 0xbf, 0x24)),
+                );
+                ui.horizontal(|ui| {
+                    ui.label(labels.trigger_label);
+                    let conflicts = [
+                        self.config.trigger_hotkey,
+                        self.config.spire_action_hotkey,
+                        HotkeyKey::F4,
+                        HotkeyKey::EMERGENCY,
+                    ];
+                    ui.add_enabled_ui(!self.armed, |ui| {
+                        hotkey_combo(
+                            ui,
+                            "vacant_colony_hotkey",
+                            self.armed,
+                            &conflicts,
+                            &mut self.config.vacant_colony_hotkey,
+                        );
+                    });
+                    render_emergency_badge(ui, labels);
+                });
+                if self.armed {
+                    ui.add_space(3.0);
+                    ui.label(
+                        RichText::new(labels.hotkeys_locked_hint)
+                            .size(10.0)
+                            .color(MUTED),
+                    );
+                }
+            });
     }
 
     fn render_advanced_section(&mut self, ui: &mut egui::Ui, labels: &Labels) {
@@ -951,7 +1060,12 @@ fn row_build_card(
                 ui.add_enabled_ui(editable, |ui| {
                     // The action key and F8 are not offered here, so a
                     // conflicting trigger cannot be created in the GUI.
-                    let conflicts = [config.spire_action_hotkey, HotkeyKey::EMERGENCY];
+                    let conflicts = [
+                        config.spire_action_hotkey,
+                        config.vacant_colony_hotkey,
+                        HotkeyKey::F4,
+                        HotkeyKey::EMERGENCY,
+                    ];
                     hotkey_combo(
                         ui,
                         "row_build_hotkey",
@@ -1166,7 +1280,12 @@ fn spire_action_card(
                 );
                 ui.add_enabled_ui(editable, |ui| {
                     // The row trigger and F8 are not offered here.
-                    let conflicts = [config.trigger_hotkey, HotkeyKey::EMERGENCY];
+                    let conflicts = [
+                        config.trigger_hotkey,
+                        config.vacant_colony_hotkey,
+                        HotkeyKey::F4,
+                        HotkeyKey::EMERGENCY,
+                    ];
                     hotkey_combo(
                         ui,
                         "spire_action_hotkey",

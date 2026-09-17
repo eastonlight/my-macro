@@ -119,18 +119,26 @@ pub enum HotkeySlot {
     Trigger,
     /// The Spire action: scan the screen, click each Spire, verified `A`.
     SpireAction,
+    /// Recall F4 and place Colonies in verified free space.
+    VacantColony,
     /// The emergency stop. Fixed to F8 and never configurable.
     Emergency,
 }
 
 impl HotkeySlot {
-    pub const ALL: [Self; 3] = [Self::Trigger, Self::SpireAction, Self::Emergency];
+    pub const ALL: [Self; 4] = [
+        Self::Trigger,
+        Self::SpireAction,
+        Self::VacantColony,
+        Self::Emergency,
+    ];
 
     pub const fn id(self) -> i32 {
         match self {
             Self::Trigger => 1,
             Self::SpireAction => 2,
             Self::Emergency => 3,
+            Self::VacantColony => 4,
         }
     }
 
@@ -139,6 +147,7 @@ impl HotkeySlot {
             1 => Some(Self::Trigger),
             2 => Some(Self::SpireAction),
             3 => Some(Self::Emergency),
+            4 => Some(Self::VacantColony),
             _ => None,
         }
     }
@@ -148,6 +157,7 @@ impl HotkeySlot {
             Self::Trigger => "trigger",
             Self::SpireAction => "spire action",
             Self::Emergency => "emergency",
+            Self::VacantColony => "F4 vacant-space Colony",
         }
     }
 }
@@ -157,33 +167,46 @@ impl HotkeySlot {
 pub struct Bindings {
     pub trigger: HotkeyKey,
     pub spire_action: HotkeyKey,
+    pub vacant_colony: HotkeyKey,
     pub emergency: HotkeyKey,
 }
 
 impl Bindings {
     /// The configurable row trigger and Spire action, plus the fixed emergency
     /// stop.
-    pub const fn new(trigger: HotkeyKey, spire_action: HotkeyKey) -> Self {
+    pub fn new(trigger: HotkeyKey, spire_action: HotkeyKey) -> Self {
+        let vacant_colony = [HotkeyKey::F5, HotkeyKey::F6, HotkeyKey::F7]
+            .into_iter()
+            .find(|key| *key != trigger && *key != spire_action)
+            .expect("two bindings cannot occupy all three fallback keys");
         Self {
             trigger,
             spire_action,
+            vacant_colony,
             emergency: HotkeyKey::EMERGENCY,
         }
+    }
+
+    pub const fn with_vacant_colony(mut self, key: HotkeyKey) -> Self {
+        self.vacant_colony = key;
+        self
     }
 
     pub const fn get(self, slot: HotkeySlot) -> HotkeyKey {
         match slot {
             HotkeySlot::Trigger => self.trigger,
             HotkeySlot::SpireAction => self.spire_action,
+            HotkeySlot::VacantColony => self.vacant_colony,
             HotkeySlot::Emergency => self.emergency,
         }
     }
 
     /// Slots in registration order, emergency last.
-    pub const fn slots(self) -> [(HotkeySlot, HotkeyKey); 3] {
+    pub const fn slots(self) -> [(HotkeySlot, HotkeyKey); 4] {
         [
             (HotkeySlot::Trigger, self.trigger),
             (HotkeySlot::SpireAction, self.spire_action),
+            (HotkeySlot::VacantColony, self.vacant_colony),
             (HotkeySlot::Emergency, self.emergency),
         ]
     }
@@ -317,6 +340,7 @@ mod tests {
             vec![
                 (HotkeySlot::Trigger, HotkeyKey::F6),
                 (HotkeySlot::SpireAction, HotkeyKey::F7),
+                (HotkeySlot::VacantColony, HotkeyKey::F5),
                 (HotkeySlot::Emergency, HotkeyKey::F8),
             ]
         );
@@ -342,6 +366,7 @@ mod tests {
         assert_eq!(
             registrar.unregistered(),
             vec![
+                (HotkeySlot::VacantColony, HotkeyKey::F5),
                 (HotkeySlot::SpireAction, HotkeyKey::F7),
                 (HotkeySlot::Trigger, HotkeyKey::F6),
             ]
@@ -380,8 +405,35 @@ mod tests {
         assert_eq!(
             registrar.unregistered(),
             vec![
+                (HotkeySlot::VacantColony, HotkeyKey::F5),
                 (HotkeySlot::SpireAction, HotkeyKey::F7),
                 (HotkeySlot::Trigger, HotkeyKey::F6),
+            ]
+        );
+    }
+
+    #[test]
+    fn unavailable_third_key_rolls_back_both_prior_bindings() {
+        let mut registrar = FakeRegistrar::default();
+        registrar.fail_on(HotkeySlot::VacantColony, "F5 occupied");
+        let error = register_all(
+            &mut registrar,
+            Bindings::new(HotkeyKey::Tilde, HotkeyKey::Tab),
+        )
+        .expect_err("third key fails");
+        assert!(matches!(
+            error,
+            HotkeyError::Register {
+                slot: HotkeySlot::VacantColony,
+                ..
+            }
+        ));
+        assert!(registrar.live().is_empty());
+        assert_eq!(
+            registrar.unregistered(),
+            vec![
+                (HotkeySlot::SpireAction, HotkeyKey::Tab),
+                (HotkeySlot::Trigger, HotkeyKey::Tilde)
             ]
         );
     }
