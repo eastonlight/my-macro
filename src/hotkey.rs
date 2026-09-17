@@ -9,9 +9,13 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-/// The F-keys a user may bind to a macro. F8 stays reserved.
+/// Keys a user may bind to a macro. F8 stays reserved.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub enum HotkeyKey {
+    #[serde(rename = "Tilde")]
+    Tilde,
+    #[serde(rename = "Tab")]
+    Tab,
     #[serde(rename = "F1")]
     F1,
     #[serde(rename = "F2")]
@@ -39,7 +43,9 @@ pub enum HotkeyKey {
 }
 
 impl HotkeyKey {
-    pub const ALL: [Self; 12] = [
+    pub const ALL: [Self; 14] = [
+        Self::Tilde,
+        Self::Tab,
         Self::F1,
         Self::F2,
         Self::F3,
@@ -61,6 +67,8 @@ impl HotkeyKey {
     /// Display name; matches the serde spelling used in the config file.
     pub const fn label(self) -> &'static str {
         match self {
+            Self::Tilde => "Tilde",
+            Self::Tab => "Tab",
             Self::F1 => "F1",
             Self::F2 => "F2",
             Self::F3 => "F3",
@@ -76,9 +84,24 @@ impl HotkeyKey {
         }
     }
 
-    /// Win32 virtual key code (`VK_F1` .. `VK_F12`).
+    /// Win32 virtual key code used by RegisterHotKey.
     pub const fn virtual_key(self) -> u16 {
-        0x70 + (self as u16)
+        match self {
+            Self::Tilde => 0xC0,
+            Self::Tab => 0x09,
+            Self::F1 => 0x70,
+            Self::F2 => 0x71,
+            Self::F3 => 0x72,
+            Self::F4 => 0x73,
+            Self::F5 => 0x74,
+            Self::F6 => 0x75,
+            Self::F7 => 0x76,
+            Self::F8 => 0x77,
+            Self::F9 => 0x78,
+            Self::F10 => 0x79,
+            Self::F11 => 0x7A,
+            Self::F12 => 0x7B,
+        }
     }
 }
 

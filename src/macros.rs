@@ -144,7 +144,7 @@ pub enum BuildTarget {
     /// `B`,`C` — square 2x2 footprint (the default).
     #[default]
     Colony,
-    /// `V`,`S` — square 3x3 footprint.
+    /// `V`,`S` — same calibrated footprint as the Creep Colony.
     Spire,
 }
 
@@ -192,7 +192,7 @@ impl BuildTarget {
     pub const fn footprint_px(self) -> i32 {
         match self {
             Self::Colony => 144,
-            Self::Spire => 216,
+            Self::Spire => 144,
         }
     }
 

@@ -73,17 +73,20 @@ pub enum RowMode {
     /// footprints, converging on the middle (leftmost, rightmost, second
     /// leftmost, second rightmost, ...).
     EndsInward,
+    /// 6 columns x 2 rows: 1..6 on the bottom row, 7..12 on the row above.
+    Grid6x2,
 }
 
 impl RowMode {
     /// Every selectable mode, in the order the GUI offers them.
-    pub const ALL: [Self; 2] = [Self::LeftToRight, Self::EndsInward];
+    pub const ALL: [Self; 3] = [Self::LeftToRight, Self::EndsInward, Self::Grid6x2];
 
     /// Stable config-file spelling, used by the serde implementation.
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::LeftToRight => "left_to_right",
             Self::EndsInward => "ends_inward",
+            Self::Grid6x2 => "grid_6x2",
         }
     }
 
@@ -109,6 +112,7 @@ impl RowMode {
                     count - 1 - outer
                 }
             }
+            Self::Grid6x2 => step % 6,
         }
     }
 }
@@ -125,9 +129,10 @@ impl<'de> Deserialize<'de> for RowMode {
         match Self::from_str(&value) {
             Some(mode) => Ok(mode),
             None => Err(serde::de::Error::custom(format!(
-                "unknown colony row mode '{value}'; expected '{}' or '{}'",
+                "unknown colony row mode '{value}'; expected '{}', '{}' or '{}'",
                 Self::LeftToRight.as_str(),
-                Self::EndsInward.as_str()
+                Self::EndsInward.as_str(),
+                Self::Grid6x2.as_str()
             ))),
         }
     }
@@ -216,9 +221,16 @@ pub fn plan_row(
         return Err(RowError::AnchorOutsideSafeArea);
     }
     let targets: Vec<Point> = (0..count)
-        .map(|step| {
-            let index = mode.footprint_index(step, count);
-            anchor.offset(footprint * i32::from(index), 0)
+        .map(|step| match mode {
+            RowMode::Grid6x2 => {
+                let column = step % 6;
+                let row = step / 6;
+                anchor.offset(footprint * i32::from(column), -footprint * i32::from(row))
+            }
+            _ => {
+                let index = mode.footprint_index(step, count);
+                anchor.offset(footprint * i32::from(index), 0)
+            }
         })
         .collect();
     // Counted across the whole span, not "the first blocked step": the number of

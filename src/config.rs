@@ -28,10 +28,10 @@ pub const DEFAULT_INTERVAL_MS: u32 = 20;
 pub const EMERGENCY_HOTKEY: HotkeyKey = HotkeyKey::EMERGENCY;
 
 /// Default trigger key: the row build runs from this single key.
-pub const DEFAULT_TRIGGER_HOTKEY: HotkeyKey = HotkeyKey::F6;
+pub const DEFAULT_TRIGGER_HOTKEY: HotkeyKey = HotkeyKey::Tilde;
 
 /// Default key for the Spire action (scan, click, verified `A`).
-pub const DEFAULT_SPIRE_ACTION_HOTKEY: HotkeyKey = HotkeyKey::F7;
+pub const DEFAULT_SPIRE_ACTION_HOTKEY: HotkeyKey = HotkeyKey::Tab;
 
 /// Fallback used when the configured row trigger already occupies the Spire
 /// action's default key: a previously valid file must keep loading instead of
@@ -188,7 +188,11 @@ impl Config {
     pub fn parse(text: &str) -> Result<Self, ConfigError> {
         let file: SettingsFile =
             toml::from_str(text).map_err(|error| ConfigError::Parse(error.to_string()))?;
-        let config = file.into_config()?;
+        let mut config = file.into_config()?;
+        if config.trigger_hotkey == HotkeyKey::F6 && config.spire_action_hotkey == HotkeyKey::F7 {
+            config.trigger_hotkey = DEFAULT_TRIGGER_HOTKEY;
+            config.spire_action_hotkey = DEFAULT_SPIRE_ACTION_HOTKEY;
+        }
         config.validate()?;
         Ok(config)
     }
