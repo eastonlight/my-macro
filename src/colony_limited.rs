@@ -1,10 +1,9 @@
-//! Row-build compatibility wrapper that caps live F6/F7 runs at ten drones.
+//! Row-build compatibility wrapper that caps long single-row runs at ten drones.
 //!
-//! The original state machine in `colony.rs` remains unchanged. Before it
-//! starts, selections of 11 or 12 drones are trimmed to ten by Shift-clicking
-//! the last occupied wireframe portraits. This keeps the existing group-9
-//! protocol internally consistent: the state machine really sees ten selected
-//! drones instead of merely pretending a 12-drone group is a 10-drone group.
+//! The original state machine in `colony.rs` remains unchanged. For the two
+//! single-row modes, selections of 11 or 12 drones are trimmed to ten by
+//! Shift-clicking the last occupied wireframe portraits. The compact `6x2`
+//! mode bypasses that cap and uses the full selected count (up to all 12).
 
 #[path = "colony.rs"]
 mod inner;
@@ -23,15 +22,11 @@ use crate::input::{DesktopAdapter, InputError};
 use crate::macros::{BuildTarget, Key, Timing};
 use crate::vision::{self, SelectionRead};
 
-/// Maximum number of selected drones the live row-build macro will consume.
-///
-/// StarCraft can still have 11 or 12 drones selected; the wrapper simply
-/// removes the last one or two portraits from the selection before handing the
-/// run to the original row state machine.
+/// Maximum number of selected drones consumed by the single-row modes.
 pub const MAX_ROW_BUILD_DRONES: u8 = 10;
 
-/// Runs the original row-build macro after reducing an 11/12-drone selection
-/// to ten drones.
+/// Runs the original row-build macro after applying the ten-drone cap only to
+/// the single-row modes. `Grid6x2` always keeps the full selection.
 pub fn run_row(
     adapter: &mut dyn DesktopAdapter,
     cancel: &AtomicBool,
@@ -61,9 +56,8 @@ pub fn run_row(
     }
 }
 
-/// Leaves selections of ten or fewer untouched. For 11/12, remove the last
-/// occupied portraits until exactly ten remain, verifying the HUD after each
-/// removal before the original state machine is allowed to run.
+/// `Grid6x2` needs no trimming: its 6-column span fits all twelve drones. The
+/// single-row modes keep the existing ten-drone cap.
 fn trim_selection_if_needed(
     adapter: &mut dyn DesktopAdapter,
     cancel: &AtomicBool,
@@ -71,6 +65,10 @@ fn trim_selection_if_needed(
     mode: RowMode,
     target: BuildTarget,
 ) -> Result<(), (Outcome, u8)> {
+    if mode == RowMode::Grid6x2 {
+        return Ok(());
+    }
+
     if cancel.load(Ordering::SeqCst) {
         return Err((Outcome::Cancelled, 0));
     }
@@ -220,9 +218,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn live_row_build_limit_is_ten() {
+    fn single_row_limit_is_ten_but_grid_6x2_is_uncapped() {
         assert_eq!(MAX_ROW_BUILD_DRONES, 10);
-        assert!(11 > MAX_ROW_BUILD_DRONES);
-        assert!(12 > MAX_ROW_BUILD_DRONES);
+        assert_ne!(RowMode::Grid6x2, RowMode::LeftToRight);
+        assert_ne!(RowMode::Grid6x2, RowMode::EndsInward);
     }
 }
