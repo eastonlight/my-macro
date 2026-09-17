@@ -491,6 +491,19 @@ impl Labels {
         }
     }
 
+    /// Live counters of a running F4 search: probes and issued orders. Shown so
+    /// a long sweep is visibly progressing instead of looking stuck.
+    pub fn vacant_colony_progress(&self, probes: usize, orders: usize) -> String {
+        match self.lang {
+            Lang::Korean => {
+                format!("검사 {probes}곳 · 보낸 명령 {orders}개 (건설 완료 아님)")
+            }
+            Lang::English => {
+                format!("{probes} probes · {orders} orders (not completed buildings)")
+            }
+        }
+    }
+
     pub fn vacant_colony_result(
         &self,
         report: &crate::vacant_colony::VacantColonyReport,

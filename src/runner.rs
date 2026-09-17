@@ -22,7 +22,7 @@ use crate::hotkey::HotkeySlot;
 use crate::input::{DesktopAdapter, InputAdapter};
 use crate::macros::{BuildTarget, MacroId, Timing};
 use crate::spire_action::{self, SpireActionReport, SpireScanError, SpireScanReport};
-use crate::vacant_colony::{self, VacantColonyReport};
+use crate::vacant_colony::{self, VacantColonyReport, VacantProgress};
 
 /// What a registered hotkey does while the app is armed.
 ///
@@ -100,6 +100,8 @@ pub struct MacroRunner {
     report_sender: Sender<RunReport>,
     vacant_reports: Receiver<VacantColonyReport>,
     vacant_sender: Sender<VacantColonyReport>,
+    /// Live counters of the F4 search, read by the GUI while it runs.
+    vacant_progress: Arc<VacantProgress>,
     spire_reports: Receiver<SpireActionReport>,
     spire_report_sender: Sender<SpireActionReport>,
     spire_scan_reports: Receiver<Result<SpireScanReport, SpireScanError>>,
@@ -119,6 +121,7 @@ impl MacroRunner {
             report_sender,
             vacant_sender,
             vacant_reports,
+            vacant_progress: Arc::new(VacantProgress::default()),
             spire_reports,
             spire_report_sender,
             spire_scan_reports,
@@ -206,6 +209,12 @@ impl MacroRunner {
         Ok(())
     }
 
+    /// Live counters of the running (or last) F4 search. The GUI shows them so
+    /// a long sweep is visibly progressing instead of looking stuck.
+    pub fn vacant_progress(&self) -> Arc<VacantProgress> {
+        Arc::clone(&self.vacant_progress)
+    }
+
     /// The third feature shares the worker slot and the latched F8 flag.
     pub fn try_start_vacant_colony(
         &mut self,
@@ -217,12 +226,13 @@ impl MacroRunner {
         }
         let cancel = Arc::clone(&self.cancel);
         let sender = self.vacant_sender.clone();
+        let progress = Arc::clone(&self.vacant_progress);
         let handle = thread::Builder::new()
             .name("oh-my-macro-vacant-colony".to_owned())
             .spawn(move || {
                 let mut adapter = adapter;
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    vacant_colony::run(adapter.as_mut(), &cancel, timing)
+                    vacant_colony::run(adapter.as_mut(), &cancel, timing, &progress)
                 }));
                 let report = result.unwrap_or_else(|_| {
                     let cleanup = adapter.release_all();

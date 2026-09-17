@@ -29,7 +29,7 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetClientRect, GetCursorPos, GetForegroundWindow, GetWindowThreadProcessId,
-    IsWindowVisible, SetCursorPos,
+    IsIconic, IsWindowVisible, SetCursorPos,
 };
 
 use crate::frame::{Frame, Point, Rect};
@@ -300,15 +300,21 @@ impl DesktopAdapter for SendInputAdapter {
         // just this small rectangle costs a fraction of a full 1920x1080
         // `PrintWindow` render — this is the per-target verification read, so it
         // dominates the action's speed.
-        if let Ok(frame) = capture_screen_region(rect)
-            && !frame.is_blank()
-        {
+        //
+        // A *dark* rectangle is not a failed capture: StarCraft draws black
+        // unexplored terrain, space and shadows, and a legitimate preview probe
+        // often lands there. Only a minimized window (or a refused `BitBlt`) is
+        // treated as "the composed desktop cannot be trusted", because falling
+        // back on darkness alone would render the whole client for every dark
+        // probe and stall a whole-screen search.
+        let minimized = unsafe { IsIconic(window) } != 0;
+        if !minimized && let Ok(frame) = capture_screen_region(rect) {
             self.safety_check()?;
             return Ok(frame);
         }
-        // Minimized, occluded by a protected surface, or a refused BitBlt: fall
-        // back to rendering the whole client and cropping it. Slower, but it is
-        // the path that works when the composed desktop cannot be trusted.
+        // Minimized or a refused BitBlt: render the whole client and crop it.
+        // Slower, but it is the path that works when the composed desktop is
+        // genuinely unavailable.
         let frame = capture_window_client(window)?;
         self.safety_check()?;
         crop_frame(&frame, rect)

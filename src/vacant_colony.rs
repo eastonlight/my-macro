@@ -2,7 +2,7 @@
 //! only a fresh, stable green placement overlay authorizes a world click.
 //! Uses all 2–12 drones, scratch group 9, and the shared worker/cancel contract.
 
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use crate::colony::CAPTURE_TIMEOUT;
@@ -18,11 +18,38 @@ use crate::vision::{self, Placement, SelectionRead};
 
 const PITCH: i32 = 144;
 const TILE: i32 = PITCH / 2;
-const SNAP: i32 = 40;
+/// How far the game may snap the preview from the probe point. A 2x2 building
+/// is snapped to the map's tile grid, so the preview centre can sit a whole
+/// tile away from the cursor; the click is sent at the cursor either way, so
+/// this only has to reject a *different* footprint, not measure the snap.
+const SNAP: i32 = TILE;
 const PARK: Point = Point::new(960, 396);
-const SEARCH_BUDGET: Duration = Duration::from_secs(45);
+/// Whole-run search budget. A full probe pass is a few seconds, so this is a
+/// backstop, not the normal exit.
+const SEARCH_BUDGET: Duration = Duration::from_secs(20);
+/// Upper bound on probes per run, so a dense view cannot keep the worker busy
+/// for long. It is a backstop: the time budget normally stops a long search
+/// first, and candidates that are certainly already built on cost no probe.
+const MAX_PROBES: usize = 192;
+/// If not a single green preview is confirmed in this many probes, the
+/// detector is not matching this game/skin; stop and say so instead of
+/// sweeping the whole screen and looking hung.
+const NO_CONFIRM_GIVE_UP: usize = 24;
 const CAMERA_SETTLE: Duration = Duration::from_millis(200);
-const PREVIEW_SETTLE: Duration = Duration::from_millis(60);
+/// Bounds for the pause between the two confirming reads of one probe. It
+/// follows the configured gap (so the user's own pacing applies) but never
+/// drops below a fraction of a game frame nor exceeds one: too short and the
+/// preview has not been drawn yet, too long and a full-screen search crawls.
+const PREVIEW_SETTLE_FLOOR: Duration = Duration::from_millis(16);
+const PREVIEW_SETTLE_CEIL: Duration = Duration::from_millis(32);
+
+/// Pause between the two reads that confirm one candidate's preview.
+fn preview_settle(timing: Timing) -> Duration {
+    timing
+        .gap
+        .max(PREVIEW_SETTLE_FLOOR)
+        .min(PREVIEW_SETTLE_CEIL)
+}
 /// Half-size of one probe read. It covers the detector's 176 px search window
 /// plus the preview square and its ring, and it is read with the cheap
 /// composed-screen copy instead of a full 1920x1080 window render.
@@ -35,6 +62,46 @@ const SKIP_RADIUS: i32 = 150;
 #[cfg(test)]
 #[path = "vacant_colony_tests.rs"]
 pub(crate) mod tests;
+
+/// The candidate list and the wall-clock budget of one search.
+#[derive(Clone, Copy, Debug)]
+struct SearchPlan<'a> {
+    points: &'a [Point],
+    budget: Duration,
+}
+
+/// Live counters of a running search, so the GUI can show that the sweep is
+/// making progress instead of looking stuck. Only the worker writes them.
+#[derive(Debug, Default)]
+pub struct VacantProgress {
+    probes: AtomicUsize,
+    orders: AtomicUsize,
+    confirmed: AtomicUsize,
+}
+
+impl VacantProgress {
+    /// Resets the counters for a new run.
+    pub fn reset(&self) {
+        self.probes.store(0, Ordering::SeqCst);
+        self.orders.store(0, Ordering::SeqCst);
+        self.confirmed.store(0, Ordering::SeqCst);
+    }
+
+    /// Candidates probed so far.
+    pub fn probes(&self) -> usize {
+        self.probes.load(Ordering::SeqCst)
+    }
+
+    /// Orders issued so far (not completed buildings).
+    pub fn orders(&self) -> usize {
+        self.orders.load(Ordering::SeqCst)
+    }
+
+    /// Candidates whose green preview was confirmed at least once.
+    pub fn confirmed(&self) -> usize {
+        self.confirmed.load(Ordering::SeqCst)
+    }
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct VacantColonyReport {
@@ -77,10 +144,25 @@ fn safe_footprint(center: Point) -> bool {
     })
 }
 
+/// Authoritative spacing rule: two 2x2 buildings must be at least one pitch
+/// apart in one axis. Applied to the *snapped* centre the detector found.
 fn unreserved(center: Point, reserved: &[Point]) -> bool {
     reserved
         .iter()
         .all(|other| (other.x - center.x).abs() >= PITCH || (other.y - center.y).abs() >= PITCH)
+}
+
+/// Cheap pre-filter for the probe grid. The game may snap the footprint by up
+/// to one tile, so a probe point that is close to an existing building could
+/// still become a different, valid footprint: only points that are certainly
+/// the same footprint are skipped without a read. Without this margin the
+/// pre-filter silently dropped valid spots and the search looked as if it found
+/// nothing even in an open area.
+fn possibly_free(point: Point, reserved: &[Point]) -> bool {
+    let certainly_taken = PITCH - SNAP;
+    reserved.iter().all(|other| {
+        (other.x - point.x).abs() >= certainly_taken || (other.y - point.y).abs() >= certainly_taken
+    })
 }
 
 /// Probe one tile apart, centre-out. Even-grid cells first give compact 2-tile
@@ -119,9 +201,10 @@ fn capture_probe(
     );
     let frame = adapter.capture_region(rect).map_err(failed)?;
     guard(adapter, cancel)?;
-    if frame.is_blank() {
-        return Err(aborted("the captured area is blank"));
-    }
+    // A dark frame is accepted: black unexplored terrain, space and shadows are
+    // normal, and rejecting them would abort on the very maps this feature is
+    // meant to build on. A capture that cannot be trusted shows up as "no
+    // preview was ever confirmed" instead (see NO_CONFIRM_GIVE_UP).
     Ok(frame)
 }
 
@@ -226,8 +309,17 @@ pub fn run(
     adapter: &mut dyn DesktopAdapter,
     cancel: &AtomicBool,
     timing: Timing,
+    progress: &VacantProgress,
 ) -> VacantColonyReport {
-    run_with_search(adapter, cancel, timing, &candidates(), SEARCH_BUDGET)
+    progress.reset();
+    run_with_search(
+        adapter,
+        cancel,
+        timing,
+        &candidates(),
+        SEARCH_BUDGET,
+        progress,
+    )
 }
 
 fn run_with_search(
@@ -236,6 +328,7 @@ fn run_with_search(
     timing: Timing,
     points: &[Point],
     budget: Duration,
+    progress: &VacantProgress,
 ) -> VacantColonyReport {
     let mut report = VacantColonyReport {
         outcome: Outcome::Completed,
@@ -250,8 +343,8 @@ fn run_with_search(
         timing,
         &mut report,
         &mut preview_at,
-        points,
-        budget,
+        SearchPlan { points, budget },
+        progress,
     ) {
         report.outcome = outcome;
     }
@@ -278,8 +371,8 @@ fn run_inner(
     timing: Timing,
     report: &mut VacantColonyReport,
     preview_at: &mut Option<Point>,
-    points: &[Point],
-    budget: Duration,
+    plan: SearchPlan<'_>,
+    progress: &VacantProgress,
 ) -> Result<(), Outcome> {
     // Read the group before F4 or Ctrl+9. No count cap and no force mode.
     move_to(adapter, cancel, PARK)?;
@@ -299,7 +392,7 @@ fn run_inner(
     expect_count(adapter, cancel, timing, count)?;
     chord(adapter, cancel, timing, Key::Control, Key::Nine)?;
 
-    let deadline = Instant::now() + budget;
+    let deadline = Instant::now() + plan.budget;
     let mut next = 0;
     let mut pool = count;
     loop {
@@ -337,23 +430,37 @@ fn run_inner(
         }
 
         let mut placed = false;
-        while let Some(&point) = points.get(next) {
+        while let Some(&point) = plan.points.get(next) {
             next += 1;
-            if !unreserved(point, &report.orders) {
+            if !possibly_free(point, &report.orders) {
                 continue;
             }
             if Instant::now() >= deadline {
                 return Err(aborted("F4 vacant-space search time limit reached"));
             }
+            if report.probes >= MAX_PROBES {
+                return Err(aborted(
+                    "the F4 search stopped after the probe limit without placing every drone",
+                ));
+            }
             move_to(adapter, cancel, point)?;
             *preview_at = Some(point);
             report.probes += 1;
-            wait(PREVIEW_SETTLE.max(timing.gap), cancel)?;
+            progress.probes.store(report.probes, Ordering::SeqCst);
+            wait(preview_settle(timing), cancel)?;
             let first = capture_probe(adapter, cancel, point)?;
             let Some(center) = fresh_green(&baseline, &first, point, &report.orders) else {
+                if progress.confirmed() == 0 && report.probes >= NO_CONFIRM_GIVE_UP {
+                    return Err(aborted(
+                        "no green placement preview was confirmed in the probes so far; the \
+                         preview detector may not match this game or skin. The row macro's forced \
+                         mode clicks without confirmation, this feature refuses to",
+                    ));
+                }
                 continue;
             };
-            wait(PREVIEW_SETTLE.max(timing.gap), cancel)?;
+            progress.confirmed.fetch_add(1, Ordering::SeqCst);
+            wait(preview_settle(timing), cancel)?;
             let second = capture_probe(adapter, cancel, point)?;
             if !same_view(&first, &second, &[point]) {
                 return Err(aborted("camera or scene changed before placement click"));
@@ -375,6 +482,7 @@ fn run_inner(
             guard(adapter, cancel)?;
             adapter.mouse_left_down().map_err(failed)?;
             report.orders.push(center);
+            progress.orders.store(report.orders.len(), Ordering::SeqCst);
             wait(timing.press, cancel)?;
             guard(adapter, cancel)?;
             adapter.mouse_left_up().map_err(failed)?;
@@ -415,7 +523,7 @@ fn confirm_closed(
     let deadline = Instant::now() + CAPTURE_TIMEOUT;
     let mut absent = 0;
     loop {
-        wait(PREVIEW_SETTLE.max(timing.gap), cancel)?;
+        wait(preview_settle(timing), cancel)?;
         let frame = capture_probe(adapter, cancel, point)?;
         if vision::detect_placement(&frame, point, PITCH) == Placement::Absent {
             absent += 1;

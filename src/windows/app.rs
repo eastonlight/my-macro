@@ -28,6 +28,7 @@ use crate::hotkey::{HotkeyError, HotkeyKey, HotkeySlot};
 use crate::macros::{BuildTarget, Key};
 use crate::runner::{FinishedReports, HotkeyAction, MacroRunner, action_for};
 use crate::ui_text::{Labels, Lang, NoticeLevel, SpirePreview, run_notice_level};
+use crate::vacant_colony::VacantProgress;
 
 /// Repaint interval so "running/idle" stays current.
 /// Muted label colour shared by the cards' secondary text.
@@ -78,6 +79,9 @@ struct MacroApp {
     /// The newest Spire result, kept for the card's compact preview. Only the
     /// newest one: no history, no activity log.
     spire_preview: Option<SpirePreview>,
+    /// Live counters of the F4 search, read from the runner while it runs so a
+    /// long sweep is visibly progressing instead of looking stuck.
+    vacant_progress: Arc<VacantProgress>,
     foreground: Option<Result<String, String>>,
     last_diagnostics: Instant,
     /// Text buffers for the two timing values: the user types ms numbers
@@ -180,6 +184,8 @@ impl MacroApp {
         let loaded = Config::load(&config_path);
         let press_edit = IntervalEdit::new(loaded.config.press_ms);
         let gap_edit = IntervalEdit::new(loaded.config.gap_ms);
+        let runner = MacroRunner::new();
+        let vacant_progress = runner.vacant_progress();
 
         Self {
             labels,
@@ -190,9 +196,10 @@ impl MacroApp {
             hotkey_error: None,
             armed: false,
             listener: None,
-            runner: MacroRunner::new(),
+            runner,
             running: None,
             spire_preview: None,
+            vacant_progress,
             foreground: None,
             last_diagnostics: Instant::now()
                 .checked_sub(DIAGNOSTICS_REFRESH)
@@ -724,6 +731,16 @@ impl MacroApp {
                     if self.running == Some(ActiveRun::VacantColony) {
                         ui.spinner();
                         ui.label(labels.status_running);
+                        // Live counters: a sweep that is still working must not
+                        // look like a frozen window.
+                        ui.label(
+                            RichText::new(labels.vacant_colony_progress(
+                                self.vacant_progress.probes(),
+                                self.vacant_progress.orders(),
+                            ))
+                            .size(11.0)
+                            .color(MUTED),
+                        );
                     }
                 });
                 // What one run sends, so the card cannot be mistaken for the

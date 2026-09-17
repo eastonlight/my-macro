@@ -47,6 +47,9 @@ pub(crate) struct Desktop {
     move_before_click: bool,
     wrong_profile: bool,
     drone: bool,
+    /// How far the game snaps the preview away from the cursor, modelling the
+    /// map's tile grid. The click still lands on the preview's footprint.
+    preview_offset: Point,
 }
 impl Desktop {
     /// Requests cancellation right after capture number `capture`. Only for
@@ -92,7 +95,20 @@ impl Desktop {
             move_before_click: false,
             wrong_profile: false,
             drone: true,
+            preview_offset: Point::new(0, 0),
         }
+    }
+
+    /// Models the game snapping the 2x2 footprint to its tile grid.
+    pub(crate) fn snapped_by(mut self, dx: i32, dy: i32) -> Self {
+        self.preview_offset = Point::new(dx, dy);
+        self
+    }
+
+    /// The point where this fake actually draws the preview.
+    fn preview_center(&self) -> Point {
+        self.cursor
+            .offset(self.preview_offset.x, self.preview_offset.y)
     }
 }
 impl InputAdapter for Desktop {
@@ -146,9 +162,12 @@ impl InputAdapter for Desktop {
             }
         } else {
             assert!(self.preview && !self.preview_missing);
-            assert!(self.orders.len() < self.capacity && !self.blocked.contains(&self.cursor));
+            let center = self.preview_center();
+            assert!(self.orders.len() < self.capacity && !self.blocked.contains(&center));
             assert!(safe_footprint(self.cursor));
-            self.orders.push(self.cursor);
+            // The building lands where the preview is drawn, not where the
+            // cursor happens to be inside the footprint.
+            self.orders.push(center);
             if !self.stuck_preview {
                 self.preview = false;
             }
@@ -249,12 +268,12 @@ impl Desktop {
             }
         }
         if self.preview && !self.preview_missing {
-            let local = self.cursor.offset(-origin.x, -origin.y);
+            let center = self.preview_center();
+            let local = center.offset(-origin.x, -origin.y);
             if (0..frame.width() as i32).contains(&local.x)
                 && (0..frame.height() as i32).contains(&local.y)
             {
-                let green =
-                    self.orders.len() < self.capacity && !self.blocked.contains(&self.cursor);
+                let green = self.orders.len() < self.capacity && !self.blocked.contains(&center);
                 paint_preview(&mut frame, local, green, PITCH);
             }
         }
@@ -263,19 +282,29 @@ impl Desktop {
 }
 
 fn execute(fake: &mut Desktop, points: &[Point]) -> VacantColonyReport {
+    execute_with_progress(fake, points).0
+}
+
+/// Same, but the caller also gets the live counters the GUI reads.
+fn execute_with_progress(
+    fake: &mut Desktop,
+    points: &[Point],
+) -> (VacantColonyReport, VacantProgress) {
     let cancel = Arc::clone(&fake.cancel);
+    let progress = VacantProgress::default();
     let report = run_with_search(
         fake,
         &cancel,
         Timing::from_millis(0, 0),
         points,
         SEARCH_BUDGET,
+        &progress,
     );
     assert!(
         fake.released && fake.held.is_empty() && !fake.mouse,
         "owned input cleanup"
     );
-    report
+    (report, progress)
 }
 const TWO: [Point; 2] = [Point::new(900, 400), Point::new(1044, 400)];
 
@@ -541,8 +570,106 @@ fn expired_search_budget_is_reported_without_a_build_order() {
         Timing::from_millis(0, 0),
         &TWO,
         Duration::ZERO,
+        &VacantProgress::default(),
     );
     assert!(matches!(report.outcome, Outcome::Aborted { .. }));
     assert!(report.orders.is_empty() && fake.released);
     assert!(!fake.keys.contains(&Key::B));
+}
+
+#[test]
+fn a_preview_snapped_by_up_to_one_tile_is_still_accepted() {
+    // The game snaps a 2x2 footprint to its tile grid, so the preview can sit
+    // almost a whole tile away from the probe point. That is not a different
+    // footprint: the click still lands on the previewed one.
+    let mut fake = Desktop::new(2).snapped_by(60, -55);
+    let report = execute(&mut fake, &TWO);
+    assert_eq!(report.outcome, Outcome::Completed, "{report:?}");
+    assert_eq!(report.orders.len(), 2);
+    // The detector reports the centre of the painted square's bounding box,
+    // which is at most one pixel off the painted centre.
+    for (order, probe) in report.orders.iter().zip(TWO.iter()) {
+        let snapped = probe.offset(60, -55);
+        assert!((order.x - snapped.x).abs() <= 1, "{order:?} vs {snapped:?}");
+        assert!((order.y - snapped.y).abs() <= 1, "{order:?} vs {snapped:?}");
+    }
+    // The snapped centres, not the probe points, keep the next order apart.
+    assert!(unreserved(report.orders[1], &report.orders[..1]));
+}
+
+#[test]
+fn a_green_square_more_than_a_tile_away_belongs_to_another_footprint() {
+    // Beyond one tile the detected square cannot be this candidate's preview,
+    // so the candidate is skipped instead of being clicked.
+    let mut fake = Desktop::new(2).snapped_by(120, 0);
+    let report = execute(&mut fake, &TWO);
+    assert!(matches!(report.outcome, Outcome::Aborted { .. }));
+    assert!(report.orders.is_empty());
+    assert_eq!(report.probes, TWO.len());
+    assert!(!fake.keys.contains(&Key::B) || !fake.orders.iter().any(|_| true));
+}
+
+#[test]
+fn a_search_that_never_confirms_a_preview_stops_early_with_a_diagnostic() {
+    // A detector that matches nothing (wrong skin, wrong game, occluded
+    // desktop) must not sweep the whole screen: it stops and says so.
+    let mut fake = Desktop::new(2);
+    fake.preview_missing = true;
+    let report = execute(&mut fake, &candidates());
+    let Outcome::Aborted { detail } = &report.outcome else {
+        panic!("expected an early stop, got {:?}", report.outcome);
+    };
+    assert!(
+        detail.contains("no green placement preview was confirmed"),
+        "{detail}"
+    );
+    assert_eq!(
+        report.probes, NO_CONFIRM_GIVE_UP,
+        "it stops at the give-up probe count, not after the whole screen"
+    );
+    assert!(report.orders.is_empty());
+}
+
+#[test]
+fn the_probe_limit_stops_a_long_search() {
+    // One order succeeds, then the view has no room left. A dense grid offers
+    // far more candidates than the limit allows, so the search must end at the
+    // limit instead of walking every point.
+    let mut fake = Desktop::new(2);
+    fake.capacity = 1;
+    // Start below the top edge: `safe_footprint` is re-checked on the detected
+    // (snapped) centre, which can differ from the probe point by a pixel.
+    let dense: Vec<Point> = (180..720)
+        .step_by(36)
+        .flat_map(|y| (120..1800).step_by(36).map(move |x| Point::new(x, y)))
+        .filter(|point| safe_footprint(*point))
+        .collect();
+    assert!(
+        dense.len() > MAX_PROBES + 16,
+        "the test needs more candidates than the limit: {}",
+        dense.len()
+    );
+    let report = execute(&mut fake, &dense);
+    let Outcome::Aborted { detail } = &report.outcome else {
+        panic!("expected a bounded stop, got {:?}", report.outcome);
+    };
+    assert!(detail.contains("probe limit"), "{detail}");
+    assert_eq!(report.orders.len(), 1, "the one real spot was still built");
+    assert_eq!(report.probes, MAX_PROBES);
+}
+
+#[test]
+fn the_live_counters_track_the_search() {
+    let mut fake = Desktop::new(2);
+    let (report, progress) = execute_with_progress(&mut fake, &TWO);
+    assert_eq!(report.outcome, Outcome::Completed, "{report:?}");
+    assert_eq!(progress.probes(), report.probes);
+    assert_eq!(progress.orders(), report.orders.len());
+    assert_eq!(progress.confirmed(), report.orders.len());
+    assert!(progress.probes() >= report.orders.len());
+
+    // A fresh run resets them, so the GUI never shows the previous run's numbers.
+    let mut fake = Desktop::new(0);
+    let (_, progress) = execute_with_progress(&mut fake, &TWO);
+    assert_eq!((progress.probes(), progress.orders()), (0, 0));
 }
