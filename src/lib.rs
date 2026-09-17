@@ -15,6 +15,7 @@
 //! Everything except `windows` is host independent, which is what allows the
 //! pure tests in this crate to run on Linux.
 
+#[path = "colony_limited.rs"]
 pub mod colony;
 pub mod config;
 pub mod engine;
