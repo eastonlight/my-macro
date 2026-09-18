@@ -361,9 +361,11 @@ impl MacroApp {
             return;
         }
         let adapter = SendInputAdapter::new(&self.config.target_process);
-        let started = self
-            .runner
-            .try_start_stargate_action(self.config.timing(), Box::new(adapter));
+        let started = self.runner.try_start_stargate_action(
+            self.config.timing(),
+            self.config.stargate_recall_f2,
+            Box::new(adapter),
+        );
         match started {
             Ok(()) => {
                 self.running = Some(ActiveRun::StargateAction);
@@ -804,6 +806,17 @@ impl MacroApp {
             self.stargate_preview.as_ref(),
             &conflicts,
             &mut self.config.stargate_action_hotkey,
+        );
+        ui.add_enabled_ui(!self.armed, |ui| {
+            ui.checkbox(
+                &mut self.config.stargate_recall_f2,
+                labels.stargate_recall_f2_checkbox,
+            );
+        });
+        ui.label(
+            RichText::new(labels.stargate_recall_f2_hint)
+                .size(10.0)
+                .color(MUTED),
         );
     }
 

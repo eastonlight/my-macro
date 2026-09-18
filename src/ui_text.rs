@@ -161,6 +161,8 @@ pub struct Labels {
     pub stargate_action_title: &'static str,
     pub stargate_action_hint: &'static str,
     pub stargate_confirm_scope_note: &'static str,
+    pub stargate_recall_f2_checkbox: &'static str,
+    pub stargate_recall_f2_hint: &'static str,
     pub stargate_skipped_note: &'static str,
     /// Label of the retained read-only scan diagnostic (see
     /// [`Labels::spire_scan_preview`]); the action card itself only ever shows
@@ -287,6 +289,8 @@ impl Labels {
             stargate_action_title: "스타게이트 감지 동작",
             stargate_action_hint: "무장하고 게임 창이 전면일 때만 동작하며, 동작 단축키를 누르면 바로 실행됩니다(미리보기 전용 모드는 없습니다). 전체 화면 SEARCH 1회에 이어 감지된 위치마다 검증용 캡처를 찍어 선택 패널을 확인하고, 스타게이트로 확인된 곳에만 A를 한 번 보냅니다. 좌표는 저장하지 않으며 1920x1080 리마스터 클라이언트만 지원합니다. 감지기는 캡처 1장으로 보정되어 아직 실기 검증 전입니다. 타이밍과 대상 프로세스는 위 카드와 공유합니다.",
             stargate_confirm_scope_note: "감지와 선택 패널 확인은 그 자리의 건물 종류만 알려줍니다 — 이 스타게이트가 내 것인지, 지금 업그레이드가 가능한지는 확인하지 않습니다.",
+            stargate_recall_f2_checkbox: "실행 전에 F2 화면 호출",
+            stargate_recall_f2_hint: "체크하면 매크로가 F2를 누르고 화면이 안정된 뒤 스타게이트 기능을 수행합니다.",
             stargate_skipped_note: "선택 패널이 스타게이트로 확인되지 않은 위치는 A를 보내지 않고 건너뛰었습니다.",
             status_scanning: "스캔 중",
             arm_hint_invalid: "설정이 올바르지 않아 무장할 수 없습니다 — 단축키가 서로 겹치지 않는지 확인하세요.",
@@ -409,6 +413,8 @@ impl Labels {
             stargate_action_title: "Stargate detect action",
             stargate_action_hint: "Runs only while armed and while the game window is in front, and the action hotkey starts it immediately - there is no preview-only mode. One full-screen SEARCH is followed by a verification capture per detected position to read the selection panel, and A is sent once only where the panel is confirmed as a Stargate. No coordinate is stored, and only the 1920x1080 Remastered client is supported. The detector is calibrated on one screenshot and is not live-verified yet. Timing and the target process are shared with the row-build card above.",
             stargate_confirm_scope_note: "A detection and a confirmed selection panel only tell you the building type at that spot - they do not check that the Stargate is yours or that an upgrade is available right now.",
+            stargate_recall_f2_checkbox: "Recall F2 before running",
+            stargate_recall_f2_hint: "When checked, the macro taps F2, waits for the view to settle, then runs the Stargate action.",
             stargate_skipped_note: "Positions whose selection panel was not confirmed as the Stargate were skipped without A.",
             status_scanning: "Scanning",
             arm_hint_invalid: "Cannot arm: the settings are invalid - the hotkeys must not collide.",

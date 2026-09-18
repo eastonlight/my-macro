@@ -33,13 +33,15 @@ pub enum Key {
     /// `A`, the one action key the Spire action presses after a verified crown
     /// selection. Never sent before the selection panel confirms the Spire.
     A,
-    /// Recall the user's saved camera location; never combined with Shift.
+    /// Recall the user's optional Stargate camera location.
+    F2,
+    /// Recall the user's saved Colony camera location; never combined with Shift.
     F4,
 }
 
 impl Key {
     /// Every key this tool may press, used when releasing held input.
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 11] = [
         Self::B,
         Self::C,
         Self::V,
@@ -49,6 +51,7 @@ impl Key {
         Self::Nine,
         Self::Escape,
         Self::A,
+        Self::F2,
         Self::F4,
     ];
 
@@ -68,6 +71,7 @@ impl Key {
             Self::Nine => 0x0A,
             Self::Escape => 0x01,
             Self::A => 0x1E,
+            Self::F2 => 0x3C,
             Self::F4 => 0x3E,
         }
     }
@@ -84,6 +88,7 @@ impl Key {
             Self::Nine => "9",
             Self::Escape => "Esc",
             Self::A => "A",
+            Self::F2 => "F2",
             Self::F4 => "F4",
         }
     }

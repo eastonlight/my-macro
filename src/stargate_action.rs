@@ -16,7 +16,7 @@ use std::sync::atomic::AtomicBool;
 
 use crate::building_action::{self, BuildingActionReport};
 use crate::input::DesktopAdapter;
-use crate::macros::Timing;
+use crate::macros::{Key, Timing};
 
 pub use crate::building_action::{
     BuildingActionOutcome, BuildingTargetDisposition, BuildingTargetReport, VERIFY_ATTEMPTS,
@@ -44,6 +44,13 @@ pub fn run(
     adapter: &mut dyn DesktopAdapter,
     cancel: &AtomicBool,
     timing: Timing,
+    recall_f2: bool,
 ) -> StargateActionReport {
-    building_action::run(adapter, cancel, timing, &crate::stargate_vision::PROFILE)
+    building_action::run_after_key(
+        adapter,
+        cancel,
+        timing,
+        &crate::stargate_vision::PROFILE,
+        recall_f2.then_some(Key::F2),
+    )
 }

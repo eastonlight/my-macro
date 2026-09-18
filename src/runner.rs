@@ -299,6 +299,7 @@ impl MacroRunner {
     pub fn try_start_stargate_action(
         &mut self,
         timing: Timing,
+        recall_f2: bool,
         adapter: Box<dyn DesktopAdapter>,
     ) -> Result<(), StartError> {
         if self.worker.is_some() {
@@ -311,7 +312,7 @@ impl MacroRunner {
             .name("oh-my-macro-stargate".to_owned())
             .spawn(move || {
                 let mut adapter = adapter;
-                let report = stargate_action_guarded(adapter.as_mut(), &cancel, timing);
+                let report = stargate_action_guarded(adapter.as_mut(), &cancel, timing, recall_f2);
                 let _ = sender.send(report);
             })
             .map_err(|error| StartError::Thread {
@@ -553,9 +554,10 @@ fn stargate_action_guarded(
     adapter: &mut dyn DesktopAdapter,
     cancel: &AtomicBool,
     timing: Timing,
+    recall_f2: bool,
 ) -> StargateActionReport {
     let guarded = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        stargate_action::run(adapter, cancel, timing)
+        stargate_action::run(adapter, cancel, timing, recall_f2)
     }));
     match guarded {
         Ok(report) => report,

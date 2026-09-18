@@ -96,6 +96,8 @@ pub struct Config {
     /// each gate's upper hull, verified `A`). Independent of the other three
     /// and never F8 or F4. Default [`DEFAULT_STARGATE_ACTION_HOTKEY`] (F7).
     pub stargate_action_hotkey: HotkeyKey,
+    /// When enabled, tap F2 and wait for the saved view before scanning gates.
+    pub stargate_recall_f2: bool,
     /// F4 saved-view Colony search (default [`DEFAULT_VACANT_COLONY_HOTKEY`]).
     /// F4 itself stays available to the game: it is never a binding here, and
     /// the macro only *presses* F4 to recall the player's saved view.
@@ -122,6 +124,7 @@ impl Default for Config {
             trigger_hotkey: DEFAULT_TRIGGER_HOTKEY,
             spire_action_hotkey: default_spire_action_hotkey(DEFAULT_TRIGGER_HOTKEY),
             stargate_action_hotkey: DEFAULT_STARGATE_ACTION_HOTKEY,
+            stargate_recall_f2: false,
             vacant_colony_hotkey: DEFAULT_VACANT_COLONY_HOTKEY,
             build_target: BuildTarget::default(),
             colony_row_mode: RowMode::default(),
@@ -362,6 +365,8 @@ struct SettingsFile {
     #[serde(default)]
     stargate_action_hotkey: Option<HotkeyKey>,
     #[serde(default)]
+    stargate_recall_f2: Option<bool>,
+    #[serde(default)]
     vacant_colony_hotkey: Option<HotkeyKey>,
     /// Removed key, accepted only so an older file still loads.
     ///
@@ -494,6 +499,7 @@ impl SettingsFile {
             trigger_hotkey: trigger,
             spire_action_hotkey: action,
             stargate_action_hotkey: stargate,
+            stargate_recall_f2: self.stargate_recall_f2.unwrap_or(false),
             vacant_colony_hotkey: vacant,
             build_target: self.build_target.unwrap_or_default(),
             colony_row_mode: self.colony_row_mode.unwrap_or_default(),

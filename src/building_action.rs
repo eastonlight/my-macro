@@ -59,6 +59,8 @@ const MOVE_SETTLE: Duration = Duration::from_millis(12);
 /// configures a very large `gap` does not pay it on every retry of a target
 /// whose panel simply is not the profile's building.
 const VERIFY_RETRY_GAP: Duration = Duration::from_millis(24);
+/// Camera settle after an optional function-key recall before the one scan.
+const PRE_CAPTURE_SETTLE: Duration = Duration::from_millis(200);
 
 /// How one action run ended.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -289,8 +291,27 @@ pub fn run(
     timing: Timing,
     profile: &BuildingProfile,
 ) -> BuildingActionReport {
+    run_after_key(adapter, cancel, timing, profile, None)
+}
+
+/// Runs the same action after optionally tapping one guarded key and waiting
+/// for the recalled camera view to settle before the single capture.
+pub fn run_after_key(
+    adapter: &mut dyn DesktopAdapter,
+    cancel: &AtomicBool,
+    timing: Timing,
+    profile: &BuildingProfile,
+    before_capture: Option<Key>,
+) -> BuildingActionReport {
     let mut report = BuildingActionReport::new(BuildingActionOutcome::Completed, profile.label);
-    let outcome = match run_inner(adapter, cancel, timing, profile, &mut report) {
+    let outcome = match run_inner(
+        adapter,
+        cancel,
+        timing,
+        profile,
+        before_capture,
+        &mut report,
+    ) {
         Ok(()) => BuildingActionOutcome::Completed,
         Err(outcome) => outcome,
     };
@@ -313,10 +334,15 @@ fn run_inner(
     cancel: &AtomicBool,
     timing: Timing,
     profile: &BuildingProfile,
+    before_capture: Option<Key>,
     report: &mut BuildingActionReport,
 ) -> Result<(), BuildingActionOutcome> {
     if cancel.load(Ordering::SeqCst) {
         return Err(BuildingActionOutcome::Cancelled);
+    }
+    if let Some(key) = before_capture {
+        tap(adapter, cancel, timing, key)?;
+        wait(PRE_CAPTURE_SETTLE, cancel)?;
     }
 
     // Exactly one full-screen capture and one full-screen search per run.
