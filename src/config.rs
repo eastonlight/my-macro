@@ -19,8 +19,8 @@ pub const DEFAULT_TARGET_PROCESS: &str = "StarCraft.exe";
 /// Interval bounds, in milliseconds. Every press/gap knob uses them.
 pub const MIN_INTERVAL_MS: u32 = 1;
 pub const MAX_INTERVAL_MS: u32 = 2000;
-/// Default timing: 20 ms press, 20 ms gap, which is fast enough that a row is
-/// not dominated by injected-event pauses and still registers in StarCraft 1.
+/// Existing default timing: 20 ms press, 20 ms gap. The minimum reliable
+/// interval still requires verification against the live game and host.
 /// A previously saved `press_ms`/`gap_ms` pair always wins over this default.
 pub const DEFAULT_INTERVAL_MS: u32 = 20;
 
@@ -93,8 +93,8 @@ pub struct Config {
     /// ignored, never turned into a setting.
     pub spire_action_hotkey: HotkeyKey,
     /// The key that starts the Stargate action (one full-screen search, click
-    /// each gate's upper hull, verified `A`). Independent of the other three
-    /// and never F8 or F4. Default [`DEFAULT_STARGATE_ACTION_HOTKEY`] (F7).
+    /// each gate's lower-hull core, verified `A`). Independent of the other three
+    /// and never F8 or F4. Default [`DEFAULT_STARGATE_ACTION_HOTKEY`] (Tilde).
     pub stargate_action_hotkey: HotkeyKey,
     /// When enabled, tap F2 and wait for the saved view before scanning gates.
     pub stargate_recall_f2: bool,
@@ -613,9 +613,9 @@ target_process = "StarCraft.exe"
     #[test]
     fn defaults_are_the_documented_ones() {
         let config = Config::default();
-        assert_eq!(config.trigger_hotkey, HotkeyKey::Tilde);
+        assert_eq!(config.trigger_hotkey, HotkeyKey::F7);
         assert_eq!(config.spire_action_hotkey, HotkeyKey::Tab);
-        assert_eq!(config.stargate_action_hotkey, HotkeyKey::F7);
+        assert_eq!(config.stargate_action_hotkey, HotkeyKey::Tilde);
         assert_eq!(config.vacant_colony_hotkey, HotkeyKey::F6);
         assert_eq!(config.build_target, BuildTarget::Colony);
         assert_eq!(config.colony_row_mode, RowMode::LeftToRight);
@@ -1012,11 +1012,11 @@ target_process = "StarCraft.exe"
     }
 
     #[test]
-    fn the_default_keys_are_tilde_and_tab_with_f8_reserved() {
+    fn the_default_keys_are_f7_tab_f6_and_tilde_with_f8_reserved() {
         let config = Config::default();
-        assert_eq!(config.trigger_hotkey, HotkeyKey::Tilde);
+        assert_eq!(config.trigger_hotkey, HotkeyKey::F7);
         assert_eq!(config.spire_action_hotkey, HotkeyKey::Tab);
-        assert_eq!(config.bindings().get(HotkeySlot::Trigger), HotkeyKey::Tilde);
+        assert_eq!(config.bindings().get(HotkeySlot::Trigger), HotkeyKey::F7);
         assert_eq!(
             config.bindings().get(HotkeySlot::SpireAction),
             HotkeyKey::Tab
@@ -1027,7 +1027,7 @@ target_process = "StarCraft.exe"
         );
         assert_eq!(
             config.bindings().get(HotkeySlot::StargateAction),
-            HotkeyKey::F7
+            HotkeyKey::Tilde
         );
         assert_eq!(config.bindings().emergency, HotkeyKey::F8);
         assert!(config.force_build, "the forced mode is the default");
@@ -1277,7 +1277,7 @@ target_process = "StarCraft.exe"
         let none = SAMPLE.replace("trigger_hotkey = \"F6\"\n", "");
         assert_eq!(
             Config::parse(&none).expect("no hotkey key").trigger_hotkey,
-            HotkeyKey::Tilde
+            HotkeyKey::F7
         );
     }
 }

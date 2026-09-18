@@ -37,8 +37,6 @@ use crate::macros::{Key, Timing};
 
 /// Bounded selection-panel reads before a click counts as unverified.
 pub const VERIFY_ATTEMPTS: usize = 3;
-/// Cancellation poll interval while waiting.
-const CANCEL_POLL_INTERVAL: Duration = Duration::from_millis(5);
 /// Small settle after the last event of one target.
 ///
 /// Nothing reads the game after the `A` key-up, so the next target's cursor
@@ -237,6 +235,11 @@ pub fn scan_once(
     if cancel.load(Ordering::SeqCst) {
         return Err(BuildingScanError::Cancelled);
     }
+    if !profile.is_valid() {
+        return Err(BuildingScanError::Unusable {
+            detail: "invalid building calibration profile".to_owned(),
+        });
+    }
 
     let started = Instant::now();
     let frame = adapter
@@ -339,6 +342,11 @@ fn run_inner(
 ) -> Result<(), BuildingActionOutcome> {
     if cancel.load(Ordering::SeqCst) {
         return Err(BuildingActionOutcome::Cancelled);
+    }
+    if !profile.is_valid() {
+        return Err(BuildingActionOutcome::Aborted {
+            detail: "invalid building calibration profile; no input was sent".to_owned(),
+        });
     }
     if let Some(key) = before_capture {
         tap(adapter, cancel, timing, key)?;
@@ -470,15 +478,11 @@ pub(crate) fn guard(
 
 /// Injectable key hold / gap, polled for cancellation.
 fn wait(duration: Duration, cancel: &AtomicBool) -> Result<(), BuildingActionOutcome> {
-    let deadline = Instant::now() + duration;
-    while Instant::now() < deadline {
-        if cancel.load(Ordering::SeqCst) {
-            return Err(BuildingActionOutcome::Cancelled);
-        }
-        let left = deadline.saturating_duration_since(Instant::now());
-        std::thread::sleep(left.min(CANCEL_POLL_INTERVAL));
+    if crate::engine::sleep_unless_cancelled(duration, cancel) {
+        Ok(())
+    } else {
+        Err(BuildingActionOutcome::Cancelled)
     }
-    Ok(())
 }
 
 fn tap(

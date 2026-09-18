@@ -54,9 +54,9 @@ fn spire_is_v_s_then_a_click_at_the_current_mouse_position() {
 }
 
 #[test]
-fn the_default_configuration_uses_tilde_and_tab_with_20ms_intervals() {
+fn the_default_configuration_uses_f7_and_tab_with_20ms_intervals() {
     let config = Config::default();
-    assert_eq!(config.trigger_hotkey, HotkeyKey::Tilde);
+    assert_eq!(config.trigger_hotkey, HotkeyKey::F7);
     assert_eq!(config.spire_action_hotkey, HotkeyKey::Tab);
     assert_eq!(config.build_target, BuildTarget::Colony);
     assert_eq!(config.press_ms, 20);
@@ -65,7 +65,7 @@ fn the_default_configuration_uses_tilde_and_tab_with_20ms_intervals() {
     assert_eq!(config.validate(), Ok(()));
 
     let bindings = Bindings::new(config.trigger_hotkey, config.spire_action_hotkey);
-    assert_eq!(bindings.get(HotkeySlot::Trigger), HotkeyKey::Tilde);
+    assert_eq!(bindings.get(HotkeySlot::Trigger), HotkeyKey::F7);
     assert_eq!(bindings.get(HotkeySlot::SpireAction), HotkeyKey::Tab);
     assert_eq!(bindings.get(HotkeySlot::Emergency), HotkeyKey::F8);
 }

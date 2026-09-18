@@ -132,6 +132,34 @@ mod tests {
     use std::path::Path;
 
     #[test]
+    fn blank_and_unrelated_unit_portraits_are_not_stargates() {
+        assert_eq!(detect_stargates(&Frame::blank(1920, 1080)).count(), 0);
+        for name in ["drone-single.png", "drones-5.png", "not-drone-colony.png"] {
+            let full = crate::vision::synthetic::selection_fixture(name);
+            let crop = full.crop(crate::vision::SELECTION_ROI).unwrap();
+            let world = crate::vision::synthetic::blit(&crop, 400, 240);
+            assert_eq!(detect_stargates(&world).count(), 0, "{name}");
+        }
+    }
+
+    #[test]
+    fn resource_bar_artwork_cannot_supply_a_template_match() {
+        for top in [0, 40] {
+            let mut frame = Frame::blank(1920, 1080);
+            for y in 0..TEMPLATE_H {
+                for x in 0..TEMPLATE_W {
+                    let v = STARGATE_TEMPLATE[(y * TEMPLATE_W + x) as usize];
+                    frame.set_pixel(1500 + x, top + y, crate::frame::Rgb::new(v, v, v));
+                }
+            }
+            for found in detect_stargates(&frame).detections {
+                let bounds = template_rect(found.center);
+                assert!(bounds.y >= 48 || bounds.right() <= 1440, "{found:?}");
+            }
+        }
+    }
+
+    #[test]
     fn aggressive_core_finds_all_fixture_stargates_without_duplicates() {
         let frame = Frame::from_png(Path::new("tests/fixtures/stargate-screen-1080/screen.png"))
             .expect("fixture");

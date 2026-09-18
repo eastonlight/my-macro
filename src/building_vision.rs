@@ -86,6 +86,57 @@ pub struct BuildingProfile {
     pub verify_iou_min: f32,
 }
 
+impl BuildingProfile {
+    /// Reject malformed calibration data before any indexing or input action.
+    pub fn is_valid(&self) -> bool {
+        let shaped = |w: i32, h: i32, len: usize| {
+            w > 0
+                && h > 0
+                && w <= CLIENT_WIDTH
+                && h <= CLIENT_HEIGHT
+                && (w as usize).checked_mul(h as usize) == Some(len)
+        };
+        shaped(self.template_w, self.template_h, self.template.len())
+            && self.template_w % 4 == 0
+            && self.template_h % 4 == 0
+            && shaped(
+                self.portrait_roi.w,
+                self.portrait_roi.h,
+                self.portrait_mask.len(),
+            )
+            && (0..self.template_w).contains(&self.click_offset.x)
+            && (0..self.template_h).contains(&self.click_offset.y)
+            && self.safe_viewport.x >= 0
+            && self.safe_viewport.y >= 0
+            && self.safe_viewport.w > 0
+            && self.safe_viewport.h > 0
+            && i64::from(self.safe_viewport.x) + i64::from(self.safe_viewport.w)
+                <= i64::from(CLIENT_WIDTH)
+            && i64::from(self.safe_viewport.y) + i64::from(self.safe_viewport.h)
+                <= i64::from(CLIENT_HEIGHT)
+            && self.portrait_roi.x >= 0
+            && self.portrait_roi.y >= 0
+            && i64::from(self.portrait_roi.x) + i64::from(self.portrait_roi.w)
+                <= i64::from(CLIENT_WIDTH)
+            && i64::from(self.portrait_roi.y) + i64::from(self.portrait_roi.h)
+                <= i64::from(CLIENT_HEIGHT)
+            && self.nms_radius >= 0
+            && self.max_detections > 0
+            && self.min_frame_stddev.is_finite()
+            && self.min_frame_stddev >= 0.0
+            && [
+                self.min_ncc,
+                self.min_edge_agreement,
+                self.coarse_min_ncc,
+                self.mid_min_ncc,
+                self.verify_coverage_min,
+                self.verify_iou_min,
+            ]
+            .into_iter()
+            .all(|value| value.is_finite() && (0.0..=1.0).contains(&value))
+    }
+}
+
 /// One confirmed building.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BuildingDetection {
@@ -156,7 +207,7 @@ pub fn detect_buildings(frame: &Frame, profile: &BuildingProfile) -> BuildingSca
     let template_w = profile.template_w;
     let template_h = profile.template_h;
     let viewport = profile.safe_viewport;
-    if !supported_client(frame) {
+    if !supported_client(frame) || !profile.is_valid() {
         return BuildingScan {
             detections: Vec::new(),
             detect_ms: started.elapsed().as_millis(),
@@ -188,7 +239,7 @@ pub fn detect_buildings(frame: &Frame, profile: &BuildingProfile) -> BuildingSca
             let tx = cx * 4;
             let ty = cy * 4;
             let center = Point::new(tx + profile.click_offset.x, ty + profile.click_offset.y);
-            if !point_in_viewport(center) {
+            if !safe_template_center(center, profile) {
                 continue;
             }
             if let Some((ncc, _)) = window_ncc(
@@ -272,6 +323,16 @@ pub fn detect_buildings(frame: &Frame, profile: &BuildingProfile) -> BuildingSca
         }
     }
 
+    // A negative coarse/mid scan needs no full-screen Sobel pass at all.
+    if mid.is_empty() {
+        return BuildingScan {
+            detections: Vec::new(),
+            detect_ms: started.elapsed().as_millis(),
+            evaluated: 0,
+            supported_profile: true,
+        };
+    }
+
     // Full stage: exact pixels, with the edge and contrast gates.
     let grad = gradient_magnitude(&gray, w, h);
     let edge_mask = template_edge_mask(profile);
@@ -285,7 +346,7 @@ pub fn detect_buildings(frame: &Frame, profile: &BuildingProfile) -> BuildingSca
                     continue;
                 }
                 let center = Point::new(fx + profile.click_offset.x, fy + profile.click_offset.y);
-                if !point_in_viewport(center) {
+                if !safe_template_center(center, profile) {
                     continue;
                 }
                 evaluated += 1;
@@ -360,7 +421,7 @@ pub fn detect_buildings(frame: &Frame, profile: &BuildingProfile) -> BuildingSca
 /// text.
 pub fn verify_building_selection(roi: &Frame, profile: &BuildingProfile) -> SelectionVerification {
     let (rw, rh) = (profile.portrait_roi.w, profile.portrait_roi.h);
-    if roi.width() as i32 != rw || roi.height() as i32 != rh {
+    if !profile.is_valid() || roi.width() as i32 != rw || roi.height() as i32 != rh {
         return SelectionVerification {
             coverage: 0.0,
             iou: 0.0,
@@ -414,17 +475,23 @@ pub fn point_in_viewport(point: Point) -> bool {
     crate::play_area::is_playable_point(point)
 }
 
+fn safe_template_center(center: Point, profile: &BuildingProfile) -> bool {
+    let viewport = profile.safe_viewport;
+    let bounds = template_rect(center, profile);
+    point_in_viewport(center)
+        && center.x >= viewport.x && center.x < viewport.right()
+        && center.y >= viewport.y && center.y < viewport.bottom()
+        // A centre below y=48 alone does not exclude resource-bar artwork:
+        // the template itself must not intersect the top-right resource bar.
+        && !(bounds.x < CLIENT_WIDTH && bounds.right() > 1440 && bounds.y < 48)
+}
+
 fn gray_image(frame: &Frame) -> Vec<u8> {
-    let (w, h) = (frame.width() as i32, frame.height() as i32);
-    let mut out = vec![0u8; (w * h) as usize];
-    for y in 0..h {
-        for x in 0..w {
-            if let Some(px) = frame.pixel(x, y) {
-                out[(y * w + x) as usize] = luma(px.r, px.g, px.b);
-            }
-        }
-    }
-    out
+    frame
+        .rgba()
+        .chunks_exact(4)
+        .map(|px| luma(px[0], px[1], px[2]))
+        .collect()
 }
 
 /// Rec.601 luma, the grayscale every profile asset is stored in.
@@ -494,19 +561,24 @@ fn window_ncc(
         return None;
     }
     let n = f64::from(tw * th);
-    let mut sum_f = 0f64;
-    let mut sum_f2 = 0f64;
-    let mut sum_tf = 0f64;
-    for j in 0..th {
-        let row = ((ty + j) * w + tx) as usize;
-        for i in 0..tw {
-            let f = f64::from(gray[row + i as usize]);
-            let t = f64::from(template[(j * tw + i) as usize]);
+    // Byte products and their sums are exact integers, well below 2^53 for
+    // the bounded client. Integer accumulation permits SIMD reassociation
+    // without changing a single NCC score or any calibrated threshold.
+    let (mut sum_f, mut sum_f2, mut sum_tf) = (0u64, 0u64, 0u64);
+    for j in 0..th as usize {
+        let row = (ty as usize + j) * w as usize + tx as usize;
+        let template_row = j * tw as usize;
+        for (&f, &t) in gray[row..row + tw as usize]
+            .iter()
+            .zip(&template[template_row..template_row + tw as usize])
+        {
+            let (f, t) = (u64::from(f), u64::from(t));
             sum_f += f;
             sum_f2 += f * f;
             sum_tf += t * f;
         }
     }
+    let (sum_f, sum_f2, sum_tf) = (sum_f as f64, sum_f2 as f64, sum_tf as f64);
     let mean_f = sum_f / n;
     let var_f = sum_f2 - sum_f * mean_f;
     if var_f <= 0.0 {
@@ -527,15 +599,20 @@ fn window_ncc(
 /// Sobel gradient magnitude, clamped to `0..=255`.
 fn gradient_magnitude(gray: &[u8], w: i32, h: i32) -> Vec<u8> {
     let mut out = vec![0u8; (w * h) as usize];
-    for y in 1..h - 1 {
-        for x in 1..w - 1 {
-            let at = |dx: i32, dy: i32| i32::from(gray[((y + dy) * w + (x + dx)) as usize]);
-            let gx =
-                (at(1, -1) + 2 * at(1, 0) + at(1, 1)) - (at(-1, -1) + 2 * at(-1, 0) + at(-1, 1));
-            let gy =
-                (at(-1, 1) + 2 * at(0, 1) + at(1, 1)) - (at(-1, -1) + 2 * at(0, -1) + at(1, -1));
-            let magnitude = (gx.abs() + gy.abs()) / 4;
-            out[(y * w + x) as usize] = magnitude.min(255) as u8;
+    let stride = w as usize;
+    for y in 1..h as usize - 1 {
+        let above = &gray[(y - 1) * stride..y * stride];
+        let row = &gray[y * stride..(y + 1) * stride];
+        let below = &gray[(y + 1) * stride..(y + 2) * stride];
+        let output = &mut out[y * stride..(y + 1) * stride];
+        for x in 1..stride - 1 {
+            let gx = (i32::from(above[x + 1])
+                + 2 * i32::from(row[x + 1])
+                + i32::from(below[x + 1]))
+                - (i32::from(above[x - 1]) + 2 * i32::from(row[x - 1]) + i32::from(below[x - 1]));
+            let gy = (i32::from(below[x - 1]) + 2 * i32::from(below[x]) + i32::from(below[x + 1]))
+                - (i32::from(above[x - 1]) + 2 * i32::from(above[x]) + i32::from(above[x + 1]));
+            output[x] = ((gx.abs() + gy.abs()) / 4).min(255) as u8;
         }
     }
     out
@@ -573,5 +650,119 @@ fn edge_agreement(grad: &[u8], w: i32, tx: i32, ty: i32, tw: i32, th: i32, mask:
         0.0
     } else {
         hits as f32 / total as f32
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn integer_ncc_is_identical_to_the_original_float_accumulation() {
+        let gray: Vec<u8> = (0..40 * 28)
+            .map(|i| ((i * 73 + i / 7) % 256) as u8)
+            .collect();
+        let template: Vec<u8> = (0..64).map(|i| ((i * 19 + 17) % 256) as u8).collect();
+        let stats = TemplateStats::new(&template, 8, 8);
+        for ty in 0..=20 {
+            for tx in 0..=32 {
+                let (mut sum, mut squares, mut products) = (0.0, 0.0, 0.0);
+                for j in 0..8 {
+                    for i in 0..8 {
+                        let f = f64::from(gray[((ty + j) * 40 + tx + i) as usize]);
+                        let t = f64::from(template[(j * 8 + i) as usize]);
+                        sum += f;
+                        squares += f * f;
+                        products += t * f;
+                    }
+                }
+                let variance = squares - sum * (sum / 64.0);
+                let stddev = (variance / 64.0).sqrt();
+                let covariance = products - sum * stats.mean;
+                let expected = if variance <= 0.0 || stddev < 4.0 {
+                    None
+                } else {
+                    Some((
+                        if covariance <= 0.0 {
+                            0.0
+                        } else {
+                            (covariance / (variance * stats.ss).sqrt()) as f32
+                        },
+                        stddev as f32,
+                    ))
+                };
+                assert_eq!(
+                    window_ncc(&gray, 40, 28, tx, ty, &template, 8, 8, &stats, 4.0),
+                    expected
+                );
+            }
+        }
+        assert_eq!(
+            window_ncc(&[12; 64], 8, 8, 0, 0, &template, 8, 8, &stats, 4.0),
+            None
+        );
+    }
+
+    #[test]
+    fn row_sobel_matches_the_original_pixel_formula() {
+        let (w, h) = (32, 24);
+        let gray: Vec<u8> = (0..w * h).map(|i| ((i * 97 + i / 3) % 256) as u8).collect();
+        let mut expected = vec![0u8; (w * h) as usize];
+        for y in 1..h - 1 {
+            for x in 1..w - 1 {
+                let at = |dx: i32, dy: i32| i32::from(gray[((y + dy) * w + x + dx) as usize]);
+                let gx =
+                    at(1, -1) + 2 * at(1, 0) + at(1, 1) - at(-1, -1) - 2 * at(-1, 0) - at(-1, 1);
+                let gy =
+                    at(-1, 1) + 2 * at(0, 1) + at(1, 1) - at(-1, -1) - 2 * at(0, -1) - at(1, -1);
+                expected[(y * w + x) as usize] = ((gx.abs() + gy.abs()) / 4).min(255) as u8;
+            }
+        }
+        assert_eq!(gradient_magnitude(&gray, w, h), expected);
+    }
+
+    #[test]
+    fn malformed_profiles_fail_closed_instead_of_panicking() {
+        let frame = Frame::blank(1920, 1080);
+        let roi = Frame::blank(160, 140);
+        let valid = crate::stargate_vision::PROFILE;
+        assert!(valid.is_valid());
+        assert!(crate::spire_vision::PROFILE.is_valid());
+        for bad in [
+            BuildingProfile {
+                template: &[1],
+                ..valid
+            },
+            BuildingProfile {
+                portrait_mask: &[1],
+                ..valid
+            },
+            BuildingProfile {
+                template_w: 3,
+                ..valid
+            },
+            BuildingProfile {
+                min_ncc: f32::NAN,
+                ..valid
+            },
+            BuildingProfile {
+                max_detections: 0,
+                ..valid
+            },
+        ] {
+            assert!(!bad.is_valid());
+            let scan = detect_buildings(&frame, &bad);
+            assert!(!scan.supported_profile);
+            assert_eq!(scan.count(), 0);
+            assert!(!verify_building_selection(&roi, &bad).accepted);
+        }
+    }
+
+    #[test]
+    fn moved_full_client_is_not_a_supported_detection_frame() {
+        let frame = Frame::new(1920, 1080, Point::new(1, 0), vec![0; 1920 * 1080 * 4]).unwrap();
+        let scan = detect_buildings(&frame, &crate::spire_vision::PROFILE);
+        assert!(!scan.supported_profile);
+        assert_eq!(scan.evaluated, 0);
     }
 }

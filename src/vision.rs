@@ -35,6 +35,20 @@ pub const SPIRE_FOOTPRINT: i32 = 216;
 /// A selection can hold at most 12 units.
 pub const MAX_DRONES: u8 = 12;
 
+/// All twelve wireframes, the single portrait and the morph bar, including
+/// every alignment offset. Only 91,136 pixels instead of a 2,073,600-pixel
+/// client; the adapter still validates the full window before each ROI read.
+pub const SELECTION_ROI: Rect = Rect::new(600, 878, 512, 178);
+
+fn supported_selection_frame(frame: &Frame) -> bool {
+    (frame.width() == CLIENT_WIDTH
+        && frame.height() == CLIENT_HEIGHT
+        && frame.origin() == Point::new(0, 0))
+        || (frame.width() == SELECTION_ROI.w as u32
+            && frame.height() == SELECTION_ROI.h as u32
+            && frame.origin() == Point::new(SELECTION_ROI.x, SELECTION_ROI.y))
+}
+
 /// Screen centre of wireframe slot 0 (column 0, row 0).
 const SLOT0: Point = Point::new(653, 930);
 /// Horizontal distance between wireframe columns.
@@ -302,9 +316,10 @@ pub fn read_slots(frame: &Frame) -> Vec<SlotReadout> {
         .collect()
 }
 
-/// Reads the selection HUD of a full client frame.
+/// Reads a calibrated full client frame or the exact [`SELECTION_ROI`].
+/// Moved, partial or uncalibrated frames fail closed.
 pub fn detect_selection(frame: &Frame) -> SelectionRead {
-    if frame.width() != CLIENT_WIDTH || frame.height() != CLIENT_HEIGHT {
+    if !supported_selection_frame(frame) {
         return SelectionRead::Rejected(RejectReason::UnsupportedProfile);
     }
     if frame.is_blank() {
@@ -395,10 +410,7 @@ fn single_portrait_is_drone(frame: &Frame) -> bool {
 /// `tests/fixtures/remastered-1080`; that calibration is an evidence limit,
 /// not a proof of live morph detection.
 pub fn detect_construction_start(frame: &Frame) -> ConstructionStart {
-    if frame.width() != CLIENT_WIDTH
-        || frame.height() != CLIENT_HEIGHT
-        || frame.origin() != Point::new(0, 0)
-    {
+    if !supported_selection_frame(frame) {
         return ConstructionStart::Unconfirmed;
     }
     if frame.is_blank() {
@@ -568,6 +580,23 @@ fn agreement(template: &[bool], cells: &[bool]) -> f32 {
     } else {
         both as f32 / either as f32
     }
+}
+
+/// Exact capture bounds needed by the placement detector, including the
+/// outside terrain ring. Clipped only at the calibrated client boundary, so
+/// the pixels available to the detector match a full-client capture.
+pub fn placement_region(target: Point, footprint_px: i32) -> Rect {
+    let radius = i64::from(PREVIEW_SEARCH_MIN.max(footprint_px)) + i64::from(PREVIEW_RING);
+    let left = (i64::from(target.x) - radius).clamp(0, i64::from(CLIENT_WIDTH));
+    let top = (i64::from(target.y) - radius).clamp(0, i64::from(CLIENT_HEIGHT));
+    let right = (i64::from(target.x) + radius).clamp(0, i64::from(CLIENT_WIDTH));
+    let bottom = (i64::from(target.y) + radius).clamp(0, i64::from(CLIENT_HEIGHT));
+    Rect::new(
+        left as i32,
+        top as i32,
+        (right - left) as i32,
+        (bottom - top) as i32,
+    )
 }
 
 /// Reads the placement preview near `target` (screen coordinates).
@@ -902,6 +931,87 @@ pub(crate) mod synthetic {
 mod tests {
     use super::synthetic::*;
     use super::*;
+
+    #[test]
+    fn hud_roi_matches_full_frames_for_every_real_selection_fixture() {
+        for name in [
+            "drone-single.png",
+            "drones-2.png",
+            "drones-3.png",
+            "drones-4.png",
+            "drones-5.png",
+            "drones-5-tooltip.png",
+            "not-drone-colony.png",
+        ] {
+            let full = selection_fixture(name);
+            let roi = full.crop(SELECTION_ROI).unwrap();
+            // Morph portrait matching shifts by +/-2 px. Keep the entire
+            // shifted mask, including the two rows above its nominal origin.
+            assert!(roi.contains_rect(Rect::new(
+                COLONY_PORTRAIT.x - 2,
+                COLONY_PORTRAIT.y - 2,
+                COLONY_PORTRAIT.w + 4,
+                COLONY_PORTRAIT.h + 4,
+            )));
+            assert_eq!(detect_selection(&roi), detect_selection(&full), "{name}");
+            assert_eq!(
+                detect_construction_start(&roi),
+                detect_construction_start(&full),
+                "{name}"
+            );
+        }
+        for count in 2..=MAX_DRONES {
+            let mut full = Frame::blank(CLIENT_WIDTH, CLIENT_HEIGHT);
+            for slot in 0..count {
+                paint_slot(&mut full, slot, true);
+            }
+            let roi = full.crop(SELECTION_ROI).unwrap();
+            assert_eq!(detect_selection(&roi), SelectionRead::Drones { count });
+        }
+    }
+
+    #[test]
+    fn moved_or_truncated_hud_captures_are_not_a_supported_profile() {
+        let full = selection_fixture("drone-single.png");
+        for rect in [Rect::new(601, 880, 512, 176), Rect::new(600, 880, 511, 176)] {
+            assert_eq!(
+                detect_selection(&full.crop(rect).unwrap()),
+                SelectionRead::Rejected(RejectReason::UnsupportedProfile)
+            );
+        }
+        let moved = Frame::new(
+            CLIENT_WIDTH,
+            CLIENT_HEIGHT,
+            Point::new(1, 0),
+            vec![128; CLIENT_WIDTH as usize * CLIENT_HEIGHT as usize * 4],
+        )
+        .unwrap();
+        assert_eq!(
+            detect_selection(&moved),
+            SelectionRead::Rejected(RejectReason::UnsupportedProfile)
+        );
+    }
+
+    #[test]
+    fn local_placement_capture_preserves_full_frame_decisions_and_ring_checks() {
+        for footprint in [FOOTPRINT, SPIRE_FOOTPRINT] {
+            for center in [
+                Point::new(800, 400),
+                Point::new(80, 100),
+                Point::new(1850, 720),
+            ] {
+                for green in [true, false] {
+                    let mut full = Frame::blank(CLIENT_WIDTH, CLIENT_HEIGHT);
+                    paint_preview(&mut full, center, green, footprint);
+                    let roi = full.crop(placement_region(center, footprint)).unwrap();
+                    assert_eq!(
+                        detect_placement(&roi, center, footprint),
+                        detect_placement(&full, center, footprint)
+                    );
+                }
+            }
+        }
+    }
 
     #[test]
     fn embedded_masks_are_square() {

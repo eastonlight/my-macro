@@ -22,12 +22,12 @@ pub use inner::{
 };
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant};
 
-use crate::engine::{CANCEL_POLL_INTERVAL, Outcome};
+use crate::engine::Outcome;
 use crate::input::{DesktopAdapter, InputError};
-use crate::macros::{BuildTarget, Key, Timing};
+use crate::macros::{BuildTarget, Timing};
 use crate::vision::{self, SelectionRead};
+use inner::{expect_count, guard, shift_click};
 
 /// Maximum number of selected drones consumed by the single-row modes.
 pub const MAX_ROW_BUILD_DRONES: u8 = 10;
@@ -95,8 +95,9 @@ fn trim_selection_if_needed(
         .move_cursor(anchor)
         .map_err(|error| (failed(error), 0))?;
     let frame = adapter
-        .capture_client()
+        .capture_region(vision::SELECTION_ROI)
         .map_err(|error| (failed(error), 0))?;
+    guard(adapter, cancel).map_err(|outcome| (outcome, 0))?;
     let detected = match vision::detect_selection(&frame) {
         SelectionRead::Drones { count } => count,
         // Let the original state machine produce its existing detailed error
@@ -145,77 +146,6 @@ fn trim_selection_if_needed(
 fn failed(error: InputError) -> Outcome {
     Outcome::Failed {
         detail: error.to_string(),
-    }
-}
-
-fn guard(adapter: &mut dyn DesktopAdapter, cancel: &AtomicBool) -> Result<(), Outcome> {
-    if cancel.load(Ordering::SeqCst) {
-        return Err(Outcome::Cancelled);
-    }
-    adapter.safety_check().map_err(failed)
-}
-
-fn wait(duration: Duration, cancel: &AtomicBool) -> Result<(), Outcome> {
-    let deadline = Instant::now() + duration;
-    while Instant::now() < deadline {
-        if cancel.load(Ordering::SeqCst) {
-            return Err(Outcome::Cancelled);
-        }
-        let left = deadline.saturating_duration_since(Instant::now());
-        std::thread::sleep(left.min(CANCEL_POLL_INTERVAL));
-    }
-    Ok(())
-}
-
-fn shift_click(
-    adapter: &mut dyn DesktopAdapter,
-    cancel: &AtomicBool,
-    timing: Timing,
-) -> Result<(), Outcome> {
-    guard(adapter, cancel)?;
-    adapter.key_down(Key::Shift).map_err(failed)?;
-    wait(timing.press, cancel)?;
-
-    guard(adapter, cancel)?;
-    adapter.mouse_left_down().map_err(failed)?;
-    wait(timing.press, cancel)?;
-
-    guard(adapter, cancel)?;
-    adapter.mouse_left_up().map_err(failed)?;
-    wait(timing.gap, cancel)?;
-
-    guard(adapter, cancel)?;
-    adapter.key_up(Key::Shift).map_err(failed)?;
-    wait(timing.gap, cancel)
-}
-
-fn expect_count(
-    adapter: &mut dyn DesktopAdapter,
-    cancel: &AtomicBool,
-    timing: Timing,
-    expected: u8,
-) -> Result<(), Outcome> {
-    let deadline = Instant::now() + CAPTURE_TIMEOUT;
-    loop {
-        if cancel.load(Ordering::SeqCst) {
-            return Err(Outcome::Cancelled);
-        }
-
-        let frame = adapter.capture_client().map_err(failed)?;
-        let read = vision::detect_selection(&frame);
-        if matches!(read, SelectionRead::Drones { count } if count == expected) {
-            return Ok(());
-        }
-
-        if Instant::now() >= deadline {
-            return Err(Outcome::Aborted {
-                detail: format!(
-                    "could not reduce the selected drone group to {expected} before the row build (last read: {read:?})"
-                ),
-            });
-        }
-
-        wait(timing.gap.max(Duration::from_millis(20)), cancel)?;
     }
 }
 

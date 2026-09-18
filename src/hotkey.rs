@@ -375,7 +375,7 @@ mod tests {
                 (HotkeySlot::Trigger, HotkeyKey::F6),
                 (HotkeySlot::SpireAction, HotkeyKey::F7),
                 (HotkeySlot::VacantColony, HotkeyKey::F9),
-                (HotkeySlot::StargateAction, HotkeyKey::F10),
+                (HotkeySlot::StargateAction, HotkeyKey::Tilde),
                 (HotkeySlot::Emergency, HotkeyKey::F8),
             ]
         );
@@ -401,7 +401,7 @@ mod tests {
         assert_eq!(
             registrar.unregistered(),
             vec![
-                (HotkeySlot::StargateAction, HotkeyKey::F10),
+                (HotkeySlot::StargateAction, HotkeyKey::Tilde),
                 (HotkeySlot::VacantColony, HotkeyKey::F9),
                 (HotkeySlot::SpireAction, HotkeyKey::F7),
                 (HotkeySlot::Trigger, HotkeyKey::F6),
@@ -465,7 +465,7 @@ mod tests {
         assert_eq!(
             registrar.unregistered(),
             vec![
-                (HotkeySlot::StargateAction, HotkeyKey::F10),
+                (HotkeySlot::StargateAction, HotkeyKey::Tilde),
                 (HotkeySlot::VacantColony, HotkeyKey::F9),
                 (HotkeySlot::SpireAction, HotkeyKey::F7),
                 (HotkeySlot::Trigger, HotkeyKey::F6),

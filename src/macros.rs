@@ -419,8 +419,12 @@ mod tests {
 
     #[test]
     fn all_keys_are_covered_by_the_release_list() {
-        assert_eq!(Key::ALL.len(), 10);
+        assert_eq!(Key::ALL.len(), 11);
         assert!(Key::ALL.contains(&Key::F4), "the third feature presses F4");
+        assert!(
+            Key::ALL.contains(&Key::F2),
+            "Stargate camera recall presses F2"
+        );
         for key in Key::ALL {
             assert!(!key.name().is_empty());
         }

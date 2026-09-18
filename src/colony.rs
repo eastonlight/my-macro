@@ -29,7 +29,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-use crate::engine::{CANCEL_POLL_INTERVAL, Outcome, RunReport};
+use crate::engine::{Outcome, RunReport};
 use crate::frame::Point;
 use crate::input::{DesktopAdapter, InputError};
 use crate::macros::{BuildTarget, Key, Timing};
@@ -480,15 +480,11 @@ pub(crate) fn guard(adapter: &mut dyn DesktopAdapter, cancel: &AtomicBool) -> Re
 
 /// Injectable key hold / gap, polled for cancellation.
 pub(crate) fn wait(duration: Duration, cancel: &AtomicBool) -> Result<(), Outcome> {
-    let deadline = Instant::now() + duration;
-    while Instant::now() < deadline {
-        if cancel.load(Ordering::SeqCst) {
-            return Err(Outcome::Cancelled);
-        }
-        let left = deadline.saturating_duration_since(Instant::now());
-        std::thread::sleep(left.min(CANCEL_POLL_INTERVAL));
+    if crate::engine::sleep_unless_cancelled(duration, cancel) {
+        Ok(())
+    } else {
+        Err(Outcome::Cancelled)
     }
-    Ok(())
 }
 
 pub(crate) fn tap(
@@ -574,7 +570,9 @@ fn await_selection(
             return Err(Outcome::Cancelled);
         }
         guard(adapter, cancel)?;
-        let frame = adapter.capture_client().map_err(failed)?;
+        let frame = adapter
+            .capture_region(vision::SELECTION_ROI)
+            .map_err(failed)?;
         guard(adapter, cancel)?;
         let read = vision::detect_selection(&frame);
         if accept(&read) {
@@ -682,7 +680,11 @@ fn place_building(
         if cancel.load(Ordering::SeqCst) {
             return Err(Outcome::Cancelled);
         }
-        let frame = adapter.capture_client().map_err(failed)?;
+        guard(adapter, cancel)?;
+        let frame = adapter
+            .capture_region(vision::placement_region(point, target.footprint_px()))
+            .map_err(failed)?;
+        guard(adapter, cancel)?;
         match vision::detect_placement(&frame, point, target.footprint_px()) {
             Placement::Valid { .. } => {
                 break Placement::Valid {
@@ -743,7 +745,11 @@ fn place_building(
         if cancel.load(Ordering::SeqCst) {
             return Err(Outcome::Cancelled);
         }
-        let frame = adapter.capture_client().map_err(failed)?;
+        guard(adapter, cancel)?;
+        let frame = adapter
+            .capture_region(vision::placement_region(point, target.footprint_px()))
+            .map_err(failed)?;
+        guard(adapter, cancel)?;
         let read = vision::detect_placement(&frame, point, target.footprint_px());
         if matches!(read, Placement::Absent) {
             closed = true;

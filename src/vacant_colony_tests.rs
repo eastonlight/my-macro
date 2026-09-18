@@ -296,6 +296,17 @@ impl DesktopAdapter for Desktop {
         Ok(())
     }
     fn capture_region(&mut self, rect: Rect) -> Result<Frame, InputError> {
+        // Selection polling now requests just the HUD. Render the same HUD
+        // state as a full capture (including scripted transitions), then crop;
+        // world-only probes below must not advance construction-panel reads.
+        if rect == vision::SELECTION_ROI {
+            // region_reads scripts WORLD obstructions; HUD reads do not move
+            // an obstructing unit or advance that separate world-read counter.
+            return self
+                .capture_client()?
+                .crop(rect)
+                .ok_or_else(|| InputError::Injection("test HUD region outside client".to_owned()));
+        }
         self.begin_capture();
         self.region_reads += 1;
         assert!(rect.w > 0 && rect.h > 0);

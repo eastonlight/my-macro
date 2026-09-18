@@ -8,7 +8,7 @@
 //! Every safety check runs before *each* event: the foreground window must
 //! belong to the configured exe, and no Ctrl/Alt/Shift/Win may be held.
 
-use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, HWND, LPARAM, POINT, RECT};
+use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, HWND, POINT, RECT};
 use windows_sys::Win32::Graphics::Gdi::{
     BI_RGB, BITMAPINFO, BitBlt, CAPTUREBLT, ClientToScreen, CreateCompatibleBitmap,
     CreateCompatibleDC, DIB_RGB_COLORS, DeleteDC, DeleteObject, GetDC, GetDIBits, HDC, HGDIOBJ,
@@ -28,8 +28,8 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     VK_RSHIFT, VK_RWIN, VK_SHIFT,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    EnumWindows, GetClientRect, GetCursorPos, GetForegroundWindow, GetWindowThreadProcessId,
-    IsIconic, IsWindowVisible, SetCursorPos,
+    GetClientRect, GetCursorPos, GetForegroundWindow, GetWindowThreadProcessId, IsIconic,
+    SetCursorPos,
 };
 
 use crate::frame::{Frame, Point, Rect};
@@ -86,13 +86,21 @@ impl SendInputAdapter {
 
     fn bind_row_window(&mut self) -> Result<HWND, InputError> {
         self.safety_check()?;
+        let needs_binding = self.row_window.is_none();
         let window = match self.row_window {
             Some(handle) => handle as HWND,
-            None => find_target_window(self.target_process())?
-                .ok_or_else(|| InputError::Unsafe("no visible game window was found".to_owned()))?,
+            // The safety gate just verified the foreground process. Bind that
+            // exact window, not the first visible window found by enumeration
+            // (which may belong to another instance of the game).
+            None => unsafe { GetForegroundWindow() },
         };
         validate_row_window(window)?;
         self.row_window = Some(window as isize);
+        if needs_binding {
+            // Focus might have changed between checking the process name and
+            // obtaining the handle. Recheck the bound identity before using it.
+            self.safety_check()?;
+        }
         Ok(window)
     }
 
@@ -282,16 +290,29 @@ impl DesktopAdapter for SendInputAdapter {
 
     fn capture_client(&mut self) -> Result<Frame, InputError> {
         let window = self.bind_row_window()?;
-        let frame = capture_window_client(window)?;
+        // The verified foreground client is already composed. Prefer a direct
+        // readback instead of asking the game to synchronously render again.
+        // Retain PrintWindow for systems whose desktop capture is unavailable
+        // or black; callers still reject an unusable fallback frame.
+        let frame = match capture_screen_region(Rect::new(0, 0, 1920, 1080)) {
+            Ok(frame) if !frame.is_blank() => frame,
+            _ => capture_window_client(window)?,
+        };
         // Capture can take time: do not accept a frame after a focus/geometry change.
         self.safety_check()?;
         Ok(frame)
     }
 
     fn capture_region(&mut self, rect: Rect) -> Result<Frame, InputError> {
-        if rect.w <= 0 || rect.h <= 0 {
+        if rect.w <= 0
+            || rect.h <= 0
+            || rect.x < 0
+            || rect.y < 0
+            || i64::from(rect.x) + i64::from(rect.w) > 1920
+            || i64::from(rect.y) + i64::from(rect.h) > 1080
+        {
             return Err(InputError::Injection(
-                "capture_region needs a positive rectangle".to_owned(),
+                "capture_region needs a positive rectangle inside the calibrated client".to_owned(),
             ));
         }
         let window = self.bind_row_window()?;
@@ -329,6 +350,7 @@ fn validate_row_window(window: HWND) -> Result<(), InputError> {
     // SAFETY: query-only calls, with output structures owned by this function.
     let valid = unsafe {
         GetForegroundWindow() == window
+            && IsIconic(window) == 0
             && GetClientRect(window, &mut rect) != 0
             && ClientToScreen(window, &mut origin) != 0
     };
@@ -405,44 +427,6 @@ pub fn make_process_dpi_aware() {
     // SAFETY: a plain process-wide setting, no pointers involved.
     unsafe {
         SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
-    }
-}
-
-/// Finds the first visible top-level window owned by `target_process`.
-fn find_target_window(target_process: &str) -> Result<Option<HWND>, InputError> {
-    struct Context<'a> {
-        target: &'a str,
-        found: HWND,
-    }
-
-    unsafe extern "system" fn visit(window: HWND, lparam: LPARAM) -> windows_sys::core::BOOL {
-        // SAFETY: `lparam` is the &mut Context passed to EnumWindows below,
-        // which outlives the enumeration.
-        let context = unsafe { &mut *(lparam as *mut Context<'_>) };
-        if unsafe { IsWindowVisible(window) } == 0 {
-            return 1;
-        }
-        if let Ok(name) = process_name_of_window(window)
-            && name.eq_ignore_ascii_case(context.target)
-        {
-            context.found = window;
-            return 0;
-        }
-        1
-    }
-
-    let mut context = Context {
-        target: target_process,
-        found: std::ptr::null_mut(),
-    };
-    // SAFETY: the callback only reads the context pointer we pass in.
-    unsafe {
-        EnumWindows(Some(visit), &mut context as *mut Context<'_> as LPARAM);
-    }
-    if context.found.is_null() {
-        Ok(None)
-    } else {
-        Ok(Some(context.found))
     }
 }
 
@@ -679,34 +663,15 @@ fn capture_screen_region(rect: Rect) -> Result<Frame, InputError> {
 /// Crops `rect` (screen pixels) out of a full client `frame`, refusing a
 /// rectangle that is not fully inside it.
 fn crop_frame(frame: &Frame, rect: Rect) -> Result<Frame, InputError> {
-    let (w, h) = (frame.width() as i32, frame.height() as i32);
-    let local_x = rect.x - frame.origin().x;
-    let local_y = rect.y - frame.origin().y;
-    if local_x < 0 || local_y < 0 || local_x + rect.w > w || local_y + rect.h > h {
-        return Err(InputError::Injection(format!(
+    frame.crop(rect).ok_or_else(|| {
+        InputError::Injection(format!(
             "capture region {rect:?} is outside the {}x{} client at ({}, {})",
             frame.width(),
             frame.height(),
             frame.origin().x,
             frame.origin().y
-        )));
-    }
-    let mut rgba = Vec::with_capacity((rect.w * rect.h * 4) as usize);
-    for y in 0..rect.h {
-        for x in 0..rect.w {
-            let pixel = frame
-                .pixel(local_x + x, local_y + y)
-                .unwrap_or(crate::frame::Rgb::new(0, 0, 0));
-            rgba.extend_from_slice(&[pixel.r, pixel.g, pixel.b, 255]);
-        }
-    }
-    Frame::new(
-        rect.w as u32,
-        rect.h as u32,
-        Point::new(rect.x, rect.y),
-        rgba,
-    )
-    .ok_or_else(|| InputError::Injection("capture region buffer size mismatch".to_owned()))
+        ))
+    })
 }
 
 fn describe_send_input_failure(code: u32) -> String {

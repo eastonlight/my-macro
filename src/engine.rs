@@ -175,6 +175,11 @@ fn execute(
         if let Err(error) = adapter.safety_check() {
             return (outcome_from_error(error), steps_done);
         }
+        // The OS gate can take time; an emergency arriving inside it must
+        // still prevent this event, not wait until after the next key-down.
+        if cancel.load(Ordering::SeqCst) {
+            return (Outcome::Cancelled, steps_done);
+        }
 
         let primitive = step.primitive;
         let result = match primitive {
@@ -224,7 +229,7 @@ fn outcome_from_error_detail(error: InputError, detail: String) -> Outcome {
 
 /// Sleeps for `duration`, waking up to poll `cancel` every
 /// [`CANCEL_POLL_INTERVAL`]. Returns `false` as soon as cancellation is seen.
-fn sleep_unless_cancelled(duration: Duration, cancel: &AtomicBool) -> bool {
+pub(crate) fn sleep_unless_cancelled(duration: Duration, cancel: &AtomicBool) -> bool {
     let deadline = Instant::now() + duration;
     loop {
         if cancel.load(Ordering::SeqCst) {
@@ -253,6 +258,18 @@ mod tests {
         let mut adapter = FakeInputAdapter::from_state(Arc::clone(&state));
         let cancel = AtomicBool::new(false);
         run(MacroId::CreepColony, timing(), &mut adapter, &cancel)
+    }
+
+    #[test]
+    fn zero_duration_wait_still_observes_cancellation() {
+        assert!(!sleep_unless_cancelled(
+            Duration::ZERO,
+            &AtomicBool::new(true)
+        ));
+        assert!(sleep_unless_cancelled(
+            Duration::ZERO,
+            &AtomicBool::new(false)
+        ));
     }
 
     #[test]

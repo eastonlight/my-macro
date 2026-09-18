@@ -362,6 +362,7 @@ impl MacroRunner {
         self.request_cancel();
         self.join_worker();
         while self.reports.try_recv().is_ok() {}
+        while self.vacant_reports.try_recv().is_ok() {}
         while self.spire_reports.try_recv().is_ok() {}
         while self.stargate_reports.try_recv().is_ok() {}
         while self.spire_scan_reports.try_recv().is_ok() {}
@@ -669,6 +670,35 @@ mod tests {
             .unwrap();
         runner.cancel_and_join();
         assert!(runner.poll_report().is_none());
+    }
+
+    #[test]
+    fn rearming_discards_every_report_channel_including_vacant_colony() {
+        let mut runner = MacroRunner::new();
+        runner
+            .vacant_sender
+            .send(VacantColonyReport::failed("retired run".to_owned()))
+            .unwrap();
+        runner
+            .report_sender
+            .send(RunReport::failed(MacroId::Spire, "retired run"))
+            .unwrap();
+        runner
+            .spire_report_sender
+            .send(SpireActionReport::failed("retired run", "Spire"))
+            .unwrap();
+        runner
+            .stargate_report_sender
+            .send(stargate_action::failed("retired run"))
+            .unwrap();
+        runner
+            .spire_scan_report_sender
+            .send(Err(SpireScanError::Cancelled))
+            .unwrap();
+        runner.rearm();
+        assert!(runner.drain_finished().is_empty());
+        assert!(!runner.cancel_flag().load(Ordering::SeqCst));
+        assert!(!runner.is_running());
     }
 
     fn spyre_timing() -> Timing {

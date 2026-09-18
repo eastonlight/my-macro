@@ -166,11 +166,50 @@ impl Frame {
 
     /// Same as [`Self::pixel`] but for a point in screen coordinates.
     pub fn pixel_at_screen(&self, point: Point) -> Option<Rgb> {
-        self.pixel(point.x - self.origin.x, point.y - self.origin.y)
+        self.pixel(
+            point.x.checked_sub(self.origin.x)?,
+            point.y.checked_sub(self.origin.y)?,
+        )
+    }
+
+    /// Whether a positive screen rectangle fits completely inside this frame.
+    /// Widened arithmetic also rejects overflowing/untrusted capture requests.
+    pub fn contains_rect(&self, rect: Rect) -> bool {
+        let x = i64::from(rect.x) - i64::from(self.origin.x);
+        let y = i64::from(rect.y) - i64::from(self.origin.y);
+        rect.w > 0
+            && rect.h > 0
+            && x >= 0
+            && y >= 0
+            && x + i64::from(rect.w) <= i64::from(self.width)
+            && y + i64::from(rect.h) <= i64::from(self.height)
+    }
+
+    /// Copies just the requested screen rectangle, preserving its origin and
+    /// alpha channel. Row copies avoid per-pixel conversion in capture fallbacks.
+    pub fn crop(&self, rect: Rect) -> Option<Self> {
+        if !self.contains_rect(rect) {
+            return None;
+        }
+        let x = (i64::from(rect.x) - i64::from(self.origin.x)) as usize;
+        let y = (i64::from(rect.y) - i64::from(self.origin.y)) as usize;
+        let row_bytes = rect.w as usize * 4;
+        let stride = self.width as usize * 4;
+        let mut rgba = Vec::with_capacity(row_bytes * rect.h as usize);
+        for row in y..y + rect.h as usize {
+            let start = row * stride + x * 4;
+            rgba.extend_from_slice(&self.rgba[start..start + row_bytes]);
+        }
+        Self::new(
+            rect.w as u32,
+            rect.h as u32,
+            Point::new(rect.x, rect.y),
+            rgba,
+        )
     }
 
     /// Raw RGBA bytes, row major, top to bottom.
-    fn rgba(&self) -> &[u8] {
+    pub(crate) fn rgba(&self) -> &[u8] {
         &self.rgba
     }
 
@@ -312,6 +351,38 @@ mod tests {
             placed.pixel_at_screen(Point::new(103, 204)),
             Some(Rgb::new(10, 20, 30))
         );
+    }
+
+    #[test]
+    fn cropping_copies_rows_preserves_alpha_and_screen_coordinates() {
+        let bytes: Vec<u8> = (0..48).collect();
+        let frame = Frame::new(4, 3, Point::new(100, 200), bytes.clone()).unwrap();
+        let crop = frame.crop(Rect::new(101, 201, 2, 2)).unwrap();
+        assert_eq!(crop.origin(), Point::new(101, 201));
+        assert_eq!(crop.rgba(), [&bytes[20..28], &bytes[36..44]].concat());
+        assert_eq!(
+            crop.pixel_at_screen(Point::new(101, 201)),
+            frame.pixel(1, 1)
+        );
+        assert_eq!(
+            crop.crop(Rect::new(102, 202, 1, 1)).unwrap().rgba(),
+            &bytes[40..44]
+        );
+    }
+
+    #[test]
+    fn cropping_rejects_empty_outside_and_overflowing_rectangles() {
+        let frame = Frame::blank(64, 48);
+        for rect in [
+            Rect::new(0, 0, 0, 1),
+            Rect::new(-1, 0, 4, 4),
+            Rect::new(60, 0, 5, 1),
+            Rect::new(0, 47, 1, 2),
+            Rect::new(i32::MAX, 0, i32::MAX, 1),
+            Rect::new(i32::MIN, 0, i32::MAX, 1),
+        ] {
+            assert!(frame.crop(rect).is_none(), "{rect:?}");
+        }
     }
 
     #[test]
