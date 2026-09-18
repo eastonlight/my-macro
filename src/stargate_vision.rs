@@ -1,15 +1,15 @@
 //! Local Stargate detector: one capture, one full-screen search, no network.
 //!
 //! The Stargate instance of the shared [`crate::building_vision`] profile
-//! detector. The template is one Stargate's lower hull; the click offset lands
-//! on that hull. A Stargate sprite is two separated hulls, so the search
-//! viewport extends to the guarded top edge. This also permits a Stargate whose
-//! upper hull is partly clipped by the screen; selection-panel verification
-//! still prevents `A` from being sent when the click does not select a Stargate.
+//! detector. The template is a compact Stargate lower-hull core, so a gate can
+//! still become a candidate when roughly half of its outer sprite is clipped at
+//! a screen edge. The thresholds intentionally favor recall; selection-panel
+//! verification still prevents `A` from being sent when an aggressive candidate
+//! click does not select a Stargate.
 //!
 //! The committed screenshot is a **single calibration scene**, not evidence of
-//! generalisation. Thresholds were chosen so the six real Stargates pass and
-//! the recorded distractors (clipped gate, Pylon, minerals, Probe, HUD) do not.
+//! generalisation. The more permissive profile may click additional candidates,
+//! but only a verified Stargate selection is allowed to receive `A`.
 
 use crate::building_vision::{BuildingProfile, CLIENT_WIDTH};
 use crate::frame::{Frame, Point, Rect};
@@ -53,38 +53,38 @@ pub const SAFE_VIEWPORT: Rect = Rect::new(
     770 - crate::play_area::EDGE_GUARD,
 );
 /// Hull template size in pixels.
-pub const TEMPLATE_W: i32 = 128;
+pub const TEMPLATE_W: i32 = 96;
 /// Hull template size in pixels.
-pub const TEMPLATE_H: i32 = 128;
+pub const TEMPLATE_H: i32 = 96;
 /// Where inside the template the click lands: the lower-hull centre.
-pub const TEMPLATE_CLICK_OFFSET: Point = Point::new(64, 64);
+pub const TEMPLATE_CLICK_OFFSET: Point = Point::new(48, 48);
 
 /// Screen rectangle of the single-unit information-panel portrait (both hulls),
 /// used to verify that a click really selected a Stargate. It stops left of the
 /// unit-name text and above the HP line.
 pub const PORTRAIT_ROI: Rect = Rect::new(608, 874, 160, 140);
 
-/// Grayscale lower-hull template, cropped from `screen.png` at `(704, 356)`.
+/// Grayscale lower-hull core, corresponding to `screen.png` at `(720, 372)`.
 const STARGATE_TEMPLATE: &[u8] =
-    include_bytes!("../tests/fixtures/stargate-screen-1080/stargate-template-128x128.gray");
+    include_bytes!("../tests/fixtures/stargate-screen-1080/stargate-template-96x96.gray");
 /// Portrait silhouette mask (`255` = sprite pixel), cropped from `screen.png`
 /// at `(608, 874)` and thresholded with `max(r, g, b) > 32`.
 const STARGATE_PORTRAIT_MASK: &[u8] =
     include_bytes!("../tests/fixtures/stargate-screen-1080/stargate-portrait-160x140.mask");
 
 /// Score above which a full-resolution candidate is reported.
-const MIN_NCC: f32 = 0.55;
+const MIN_NCC: f32 = 0.48;
 /// Minimum frame window contrast (0..255 luma stddev) to accept a match.
-const MIN_FRAME_STDDEV: f32 = 12.0;
+const MIN_FRAME_STDDEV: f32 = 10.0;
 /// Minimum fraction of template edge pixels that coincide with screen edges.
-const MIN_EDGE_AGREEMENT: f32 = 0.5;
+const MIN_EDGE_AGREEMENT: f32 = 0.40;
 /// Coarse stage accept threshold.
-const COARSE_MIN_NCC: f32 = 0.25;
-const MID_MIN_NCC: f32 = 0.4;
+const COARSE_MIN_NCC: f32 = 0.20;
+const MID_MIN_NCC: f32 = 0.32;
 /// Upper bound on reported Stargates in one scene.
 const MAX_DETECTIONS: usize = 32;
 /// Two detections closer than this are the same building.
-const NMS_RADIUS: i32 = 48;
+const NMS_RADIUS: i32 = 72;
 /// A portrait pixel exists when any channel is above this; the panel is black.
 const PORTRAIT_CHANNEL_MIN: u8 = 32;
 /// Selection verification thresholds (shape overlap with the real portrait).
@@ -124,4 +124,35 @@ pub fn detect_stargates(frame: &Frame) -> StargateScan {
 /// Scores a captured selection-panel ROI against the reference Stargate portrait.
 pub fn verify_stargate_selection(roi: &Frame) -> SelectionVerification {
     crate::building_vision::verify_building_selection(roi, &PROFILE)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn aggressive_core_finds_all_fixture_stargates_without_duplicates() {
+        let frame = Frame::from_png(Path::new("tests/fixtures/stargate-screen-1080/screen.png"))
+            .expect("fixture");
+        let scan = detect_stargates(&frame);
+        let mut centers: Vec<Point> = scan
+            .detections
+            .iter()
+            .map(|detection| detection.center)
+            .collect();
+        centers.sort_by_key(|center| (center.y, center.x));
+        assert_eq!(
+            centers,
+            vec![
+                Point::new(1128, 132),
+                Point::new(768, 420),
+                Point::new(1056, 420),
+                Point::new(1488, 420),
+                Point::new(912, 636),
+                Point::new(1200, 636),
+                Point::new(1488, 636),
+            ]
+        );
+    }
 }

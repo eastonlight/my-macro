@@ -589,10 +589,11 @@ target_process = "StarCraft.exe"
     /// `spire_scan_only` is deliberately absent: the key is read from older
     /// files but never written again, so a removed feature cannot come back
     /// through a saved file.
-    const WRITTEN_KEYS: [&str; 10] = [
+    const WRITTEN_KEYS: [&str; 11] = [
         "trigger_hotkey",
         "spire_action_hotkey",
         "stargate_action_hotkey",
+        "stargate_recall_f2",
         "vacant_colony_hotkey",
         "build_target",
         "colony_row_mode",
@@ -666,6 +667,7 @@ target_process = "StarCraft.exe"
             spire_action_hotkey: HotkeyKey::F12,
             stargate_action_hotkey: HotkeyKey::F10,
             vacant_colony_hotkey: HotkeyKey::F9,
+            stargate_recall_f2: true,
             build_target: BuildTarget::Spire,
             colony_row_mode: RowMode::EndsInward,
             force_build: false,
@@ -1084,16 +1086,14 @@ target_process = "StarCraft.exe"
 
     #[test]
     fn a_file_without_the_stargate_action_key_gets_a_free_default() {
-        // The current default is F7. `SAMPLE` binds the row trigger to F6 and
-        // the third key falls back to F7, so the Stargate action continues down
-        // the free-key chain instead of making the file invalid.
+        // The current default is Tilde. `SAMPLE` leaves Tilde free, so an
+        // older file receives the normal default without becoming invalid.
         assert!(!SAMPLE.contains("stargate_action_hotkey"), "{SAMPLE}");
         let config = Config::parse(SAMPLE).expect("an older file must still load");
-        assert_eq!(config.stargate_action_hotkey, HotkeyKey::F9);
+        assert_eq!(config.stargate_action_hotkey, HotkeyKey::Tilde);
         assert_eq!(config.validate(), Ok(()));
 
-        assert_eq!(Config::default().stargate_action_hotkey, HotkeyKey::F7);
-
+        assert_eq!(Config::default().stargate_action_hotkey, HotkeyKey::Tilde);
         // An explicit key always wins.
         let text = format!("{SAMPLE}stargate_action_hotkey = \"F11\"\n");
         assert_eq!(
@@ -1107,7 +1107,7 @@ target_process = "StarCraft.exe"
     #[test]
     fn the_stargate_key_must_be_distinct_from_every_other_binding() {
         for key in [
-            HotkeyKey::Tilde,
+            HotkeyKey::F7,
             HotkeyKey::Tab,
             HotkeyKey::F6,
             HotkeyKey::EMERGENCY,
