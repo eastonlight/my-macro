@@ -1,11 +1,12 @@
 //! Local Stargate detector: one capture, one full-screen search, no network.
 //!
 //! The Stargate instance of the shared [`crate::building_vision`] profile
-//! detector. The template is a compact Stargate lower-hull core, so a gate can
-//! still become a candidate when roughly half of its outer sprite is clipped at
-//! a screen edge. The thresholds intentionally favor recall; selection-panel
-//! verification still prevents `A` from being sent when an aggressive candidate
-//! click does not select a Stargate.
+//! detector. The template is a very compact Stargate lower-hull core. A gate
+//! can remain a candidate even when more than half of its outer sprite is clipped
+//! at a screen edge, as long as this distinctive central fragment is still visible.
+//! The thresholds intentionally favor recall; selection-panel verification still
+//! prevents `A` from being sent when an aggressive candidate click does not select
+//! a Stargate.
 //!
 //! The committed screenshot is a **single calibration scene**, not evidence of
 //! generalisation. The more permissive profile may click additional candidates,
@@ -53,38 +54,38 @@ pub const SAFE_VIEWPORT: Rect = Rect::new(
     770 - crate::play_area::EDGE_GUARD,
 );
 /// Hull template size in pixels.
-pub const TEMPLATE_W: i32 = 96;
+pub const TEMPLATE_W: i32 = 64;
 /// Hull template size in pixels.
-pub const TEMPLATE_H: i32 = 96;
-/// Where inside the template the click lands: the lower-hull centre.
-pub const TEMPLATE_CLICK_OFFSET: Point = Point::new(48, 48);
+pub const TEMPLATE_H: i32 = 64;
+/// Where inside the template the click lands: the visible lower-hull centre.
+pub const TEMPLATE_CLICK_OFFSET: Point = Point::new(32, 32);
 
 /// Screen rectangle of the single-unit information-panel portrait (both hulls),
 /// used to verify that a click really selected a Stargate. It stops left of the
 /// unit-name text and above the HP line.
 pub const PORTRAIT_ROI: Rect = Rect::new(608, 874, 160, 140);
 
-/// Grayscale lower-hull core, corresponding to `screen.png` at `(720, 372)`.
+/// Grayscale lower-hull core, corresponding to `screen.png` at `(736, 388)`.
 const STARGATE_TEMPLATE: &[u8] =
-    include_bytes!("../tests/fixtures/stargate-screen-1080/stargate-template-96x96.gray");
+    include_bytes!("../tests/fixtures/stargate-screen-1080/stargate-template-64x64.gray");
 /// Portrait silhouette mask (`255` = sprite pixel), cropped from `screen.png`
 /// at `(608, 874)` and thresholded with `max(r, g, b) > 32`.
 const STARGATE_PORTRAIT_MASK: &[u8] =
     include_bytes!("../tests/fixtures/stargate-screen-1080/stargate-portrait-160x140.mask");
 
 /// Score above which a full-resolution candidate is reported.
-const MIN_NCC: f32 = 0.48;
+const MIN_NCC: f32 = 0.46;
 /// Minimum frame window contrast (0..255 luma stddev) to accept a match.
-const MIN_FRAME_STDDEV: f32 = 10.0;
+const MIN_FRAME_STDDEV: f32 = 9.0;
 /// Minimum fraction of template edge pixels that coincide with screen edges.
-const MIN_EDGE_AGREEMENT: f32 = 0.40;
+const MIN_EDGE_AGREEMENT: f32 = 0.35;
 /// Coarse stage accept threshold.
-const COARSE_MIN_NCC: f32 = 0.20;
-const MID_MIN_NCC: f32 = 0.32;
+const COARSE_MIN_NCC: f32 = 0.18;
+const MID_MIN_NCC: f32 = 0.28;
 /// Upper bound on reported Stargates in one scene.
 const MAX_DETECTIONS: usize = 32;
 /// Two detections closer than this are the same building.
-const NMS_RADIUS: i32 = 72;
+const NMS_RADIUS: i32 = 84;
 /// A portrait pixel exists when any channel is above this; the panel is black.
 const PORTRAIT_CHANNEL_MIN: u8 = 32;
 /// Selection verification thresholds (shape overlap with the real portrait).
@@ -157,6 +158,28 @@ mod tests {
                 assert!(bounds.y >= 48 || bounds.right() <= 1440, "{found:?}");
             }
         }
+    }
+
+    #[test]
+    fn core_at_the_guarded_left_edge_remains_clickable() {
+        let mut frame = Frame::blank(1920, 1080);
+        let left = SAFE_VIEWPORT.x;
+        let top = 240;
+        for y in 0..TEMPLATE_H {
+            for x in 0..TEMPLATE_W {
+                let v = STARGATE_TEMPLATE[(y * TEMPLATE_W + x) as usize];
+                frame.set_pixel(left + x, top + y, crate::frame::Rgb::new(v, v, v));
+            }
+        }
+
+        let scan = detect_stargates(&frame);
+        assert!(
+            scan.detections
+                .iter()
+                .any(|found| found.center == Point::new(left + 32, top + 32)),
+            "{:?}",
+            scan.detections
+        );
     }
 
     #[test]

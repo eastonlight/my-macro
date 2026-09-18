@@ -33,9 +33,11 @@ All files are byte-for-byte derived from `screen.png` and embedded with
 
 - `stargate-template-128x128.gray` — original 128×128 grayscale lower-hull
   calibration crop at `(704, 356)`, retained as source evidence.
-- `stargate-template-96x96.gray` — aggressive 96×96 lower-hull core at
-  `(720, 372)` used by the detector so edge-clipped gates remain candidates;
-  luma is `(299·r + 587·g + 114·b) / 1000`.
+- `stargate-template-96x96.gray` — previous aggressive lower-hull core at
+  `(720, 372)`, retained as calibration evidence.
+- `stargate-template-64x64.gray` — very aggressive lower-hull core at
+  `(736, 388)` used by the detector so more-than-half edge-clipped gates can
+  remain candidates; luma is `(299·r + 587·g + 114·b) / 1000`.
 - `stargate-portrait-160x140.mask` — 160×140 silhouette of the selected-unit
   panel portrait at `(608, 874)`; `255` where `max(r, g, b) > 32`.
 
