@@ -238,7 +238,7 @@ impl Bindings {
 /// F4, F5 and F8 are deliberately absent: F4 is the game's saved view, F5 is
 /// used by the game itself, F8 is the emergency stop.
 pub const STARGATE_FALLBACK_KEYS: [HotkeyKey; 6] = [
-    HotkeyKey::F7,
+    HotkeyKey::Tilde,
     HotkeyKey::F9,
     HotkeyKey::F10,
     HotkeyKey::F11,

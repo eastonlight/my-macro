@@ -28,7 +28,7 @@ pub const DEFAULT_INTERVAL_MS: u32 = 20;
 pub const EMERGENCY_HOTKEY: HotkeyKey = HotkeyKey::EMERGENCY;
 
 /// Default trigger key: the row build runs from this single key.
-pub const DEFAULT_TRIGGER_HOTKEY: HotkeyKey = HotkeyKey::Tilde;
+pub const DEFAULT_TRIGGER_HOTKEY: HotkeyKey = HotkeyKey::F7;
 
 /// Default key for the Spire action (scan, click, verified `A`).
 pub const DEFAULT_SPIRE_ACTION_HOTKEY: HotkeyKey = HotkeyKey::Tab;
@@ -38,8 +38,7 @@ pub const DEFAULT_SPIRE_ACTION_HOTKEY: HotkeyKey = HotkeyKey::Tab;
 pub const DEFAULT_VACANT_COLONY_HOTKEY: HotkeyKey = HotkeyKey::F6;
 
 /// Default key for the Stargate action (scan, click each gate, verified `A`).
-/// F7 is free in the game and is not the row trigger or the Spire action.
-pub const DEFAULT_STARGATE_ACTION_HOTKEY: HotkeyKey = HotkeyKey::F7;
+pub const DEFAULT_STARGATE_ACTION_HOTKEY: HotkeyKey = HotkeyKey::Tilde;
 
 fn default_vacant_colony_hotkey(trigger: HotkeyKey, action: HotkeyKey) -> HotkeyKey {
     Bindings::new(trigger, action).vacant_colony
@@ -61,9 +60,8 @@ fn default_spire_action_hotkey(trigger: HotkeyKey) -> HotkeyKey {
 }
 
 /// The non-conflicting default for a file that does not name the Stargate
-/// action key yet. F7 is the normal default; an occupied F7 falls through the
-/// free-key chain ([`crate::hotkey::STARGATE_FALLBACK_KEYS`]) instead of
-/// making a previously valid file invalid.
+/// action key yet. Tilde is the normal default; an occupied Tilde falls through
+/// the free-key chain ([`crate::hotkey::STARGATE_FALLBACK_KEYS`]).
 fn default_stargate_action_hotkey(
     trigger: HotkeyKey,
     action: HotkeyKey,
@@ -272,6 +270,15 @@ impl Config {
         if config.trigger_hotkey == HotkeyKey::F6 && config.spire_action_hotkey == HotkeyKey::F7 {
             config.trigger_hotkey = DEFAULT_TRIGGER_HOTKEY;
             config.spire_action_hotkey = DEFAULT_SPIRE_ACTION_HOTKEY;
+        }
+        // Migrate the immediately previous defaults so an existing install
+        // receives the requested swap instead of retaining Tilde/F7 forever.
+        // Any other explicit pair is a custom binding and remains untouched.
+        if config.trigger_hotkey == HotkeyKey::Tilde
+            && config.stargate_action_hotkey == HotkeyKey::F7
+        {
+            config.trigger_hotkey = HotkeyKey::F7;
+            config.stargate_action_hotkey = HotkeyKey::Tilde;
         }
         config.validate()?;
         Ok(config)
