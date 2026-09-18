@@ -38,11 +38,13 @@ All files are byte-for-byte derived from `screen.png` and embedded with
 - `stargate-template-64x64.gray` — very aggressive lower-hull core at
   `(736, 388)` used by the detector so more-than-half edge-clipped gates can
   remain candidates; luma is `(299·r + 587·g + 114·b) / 1000`.
+- `stargate-upper-template-64x64.gray` — upper-hull core at `(672, 288)`
+  used when the lower hull is hidden by the bottom HUD.
 - `stargate-portrait-160x140.mask` — 160×140 silhouette of the selected-unit
   panel portrait at `(608, 874)`; `255` where `max(r, g, b) > 32`.
 
 ## Scope caveat
 
-Single calibration scene, not evidence of map/skin/team generalisation, and
-not live-verified. A Stargate sprite is two hulls; the template matches the
-lower hull and NMS keeps one detection per building.
+Single calibration scene is not evidence of map/skin/team generalisation.
+The lower and upper hull passes are merged by their calibrated geometric offset;
+selection-panel verification remains the final gate before `A`.

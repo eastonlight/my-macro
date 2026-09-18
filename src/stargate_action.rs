@@ -46,11 +46,12 @@ pub fn run(
     timing: Timing,
     recall_f2: bool,
 ) -> StargateActionReport {
-    building_action::run_after_key(
+    building_action::run_after_key_with_detector(
         adapter,
         cancel,
         timing,
         &crate::stargate_vision::PROFILE,
         recall_f2.then_some(Key::F2),
+        Some(crate::stargate_vision::detect_stargates),
     )
 }

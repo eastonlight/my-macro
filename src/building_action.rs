@@ -29,9 +29,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use crate::building_vision::{
-    self, BuildingDetection, BuildingProfile, CLIENT_HEIGHT, CLIENT_WIDTH,
+    self, BuildingDetection, BuildingProfile, BuildingScan, CLIENT_HEIGHT, CLIENT_WIDTH,
 };
-use crate::frame::Point;
+use crate::frame::{Frame, Point};
 use crate::input::{DesktopAdapter, InputError};
 use crate::macros::{Key, Timing};
 
@@ -306,6 +306,20 @@ pub fn run_after_key(
     profile: &BuildingProfile,
     before_capture: Option<Key>,
 ) -> BuildingActionReport {
+    run_after_key_with_detector(adapter, cancel, timing, profile, before_capture, None)
+}
+
+/// Runs the action with an optional profile-specific detector. The supplied
+/// detector still receives exactly the one captured frame and must return
+/// clickable coordinates for the same profile used by portrait verification.
+pub fn run_after_key_with_detector(
+    adapter: &mut dyn DesktopAdapter,
+    cancel: &AtomicBool,
+    timing: Timing,
+    profile: &BuildingProfile,
+    before_capture: Option<Key>,
+    detector: Option<fn(&Frame) -> BuildingScan>,
+) -> BuildingActionReport {
     let mut report = BuildingActionReport::new(BuildingActionOutcome::Completed, profile.label);
     let outcome = match run_inner(
         adapter,
@@ -313,6 +327,7 @@ pub fn run_after_key(
         timing,
         profile,
         before_capture,
+        detector,
         &mut report,
     ) {
         Ok(()) => BuildingActionOutcome::Completed,
@@ -338,6 +353,7 @@ fn run_inner(
     timing: Timing,
     profile: &BuildingProfile,
     before_capture: Option<Key>,
+    detector: Option<fn(&Frame) -> BuildingScan>,
     report: &mut BuildingActionReport,
 ) -> Result<(), BuildingActionOutcome> {
     if cancel.load(Ordering::SeqCst) {
@@ -382,7 +398,10 @@ fn run_inner(
         });
     }
 
-    let scan = building_vision::detect_buildings(&frame, profile);
+    let scan = detector.map_or_else(
+        || building_vision::detect_buildings(&frame, profile),
+        |detect| detect(&frame),
+    );
     report.detect_ms = scan.detect_ms;
     report.detections = scan.count();
     if cancel.load(Ordering::SeqCst) {

@@ -12,6 +12,8 @@
 //! generalisation. The more permissive profile may click additional candidates,
 //! but only a verified Stargate selection is allowed to receive `A`.
 
+use std::time::Instant;
+
 use crate::building_vision::{BuildingProfile, CLIENT_WIDTH};
 use crate::frame::{Frame, Point, Rect};
 
@@ -24,6 +26,29 @@ pub static PROFILE: BuildingProfile = BuildingProfile {
     template_w: TEMPLATE_W,
     template_h: TEMPLATE_H,
     click_offset: TEMPLATE_CLICK_OFFSET,
+    safe_viewport: SAFE_VIEWPORT,
+    portrait_roi: PORTRAIT_ROI,
+    portrait_mask: STARGATE_PORTRAIT_MASK,
+    min_ncc: MIN_NCC,
+    min_frame_stddev: MIN_FRAME_STDDEV,
+    min_edge_agreement: MIN_EDGE_AGREEMENT,
+    coarse_min_ncc: COARSE_MIN_NCC,
+    mid_min_ncc: MID_MIN_NCC,
+    nms_radius: NMS_RADIUS,
+    max_detections: MAX_DETECTIONS,
+    portrait_channel_min: PORTRAIT_CHANNEL_MIN,
+    verify_coverage_min: VERIFY_COVERAGE_MIN,
+    verify_iou_min: VERIFY_IOU_MIN,
+};
+
+/// Alternate world profile for the upper hull. This remains visible when a
+/// bottom-row Stargate's lower hull is covered by the in-game HUD.
+static UPPER_PROFILE: BuildingProfile = BuildingProfile {
+    label: "Stargate",
+    template: STARGATE_UPPER_TEMPLATE,
+    template_w: UPPER_TEMPLATE_W,
+    template_h: UPPER_TEMPLATE_H,
+    click_offset: UPPER_TEMPLATE_CLICK_OFFSET,
     safe_viewport: SAFE_VIEWPORT,
     portrait_roi: PORTRAIT_ROI,
     portrait_mask: STARGATE_PORTRAIT_MASK,
@@ -59,6 +84,10 @@ pub const TEMPLATE_W: i32 = 64;
 pub const TEMPLATE_H: i32 = 64;
 /// Where inside the template the click lands: the visible lower-hull centre.
 pub const TEMPLATE_CLICK_OFFSET: Point = Point::new(32, 32);
+/// Upper-hull fragment used when the lower hull is hidden by the HUD.
+const UPPER_TEMPLATE_W: i32 = 64;
+const UPPER_TEMPLATE_H: i32 = 64;
+const UPPER_TEMPLATE_CLICK_OFFSET: Point = Point::new(32, 32);
 
 /// Screen rectangle of the single-unit information-panel portrait (both hulls),
 /// used to verify that a click really selected a Stargate. It stops left of the
@@ -68,6 +97,9 @@ pub const PORTRAIT_ROI: Rect = Rect::new(608, 874, 160, 140);
 /// Grayscale lower-hull core, corresponding to `screen.png` at `(736, 388)`.
 const STARGATE_TEMPLATE: &[u8] =
     include_bytes!("../tests/fixtures/stargate-screen-1080/stargate-template-64x64.gray");
+/// Grayscale upper-hull core from `screen.png` at `(672, 288)`.
+const STARGATE_UPPER_TEMPLATE: &[u8] =
+    include_bytes!("../tests/fixtures/stargate-screen-1080/stargate-upper-template-64x64.gray",);
 /// Portrait silhouette mask (`255` = sprite pixel), cropped from `screen.png`
 /// at `(608, 874)` and thresholded with `max(r, g, b) > 32`.
 const STARGATE_PORTRAIT_MASK: &[u8] =
@@ -86,6 +118,9 @@ const MID_MIN_NCC: f32 = 0.28;
 const MAX_DETECTIONS: usize = 32;
 /// Two detections closer than this are the same building.
 const NMS_RADIUS: i32 = 84;
+/// Expected lower-centre minus upper-centre offset for one Stargate.
+const HULL_OFFSET: Point = Point::new(64, 100);
+const HULL_OFFSET_TOLERANCE: i32 = 28;
 /// A portrait pixel exists when any channel is above this; the panel is black.
 const PORTRAIT_CHANNEL_MIN: u8 = 32;
 /// Selection verification thresholds (shape overlap with the real portrait).
@@ -117,9 +152,45 @@ pub fn portrait_mask_pixels() -> &'static [u8] {
     STARGATE_PORTRAIT_MASK
 }
 
-/// Scans one frame for Stargates. This is the single expensive pass.
+/// Scans one frame with both hull fragments and merges the two target lists.
+/// The upper fragment recovers gates whose lower hull is behind the HUD; the
+/// lower fragment retains support for gates clipped at the top of the screen.
 pub fn detect_stargates(frame: &Frame) -> StargateScan {
-    crate::building_vision::detect_buildings(frame, &PROFILE)
+    let started = Instant::now();
+    let lower = crate::building_vision::detect_buildings(frame, &PROFILE);
+    if !lower.supported_profile {
+        return lower;
+    }
+    let upper = crate::building_vision::detect_buildings(frame, &UPPER_PROFILE);
+    let evaluated = lower.evaluated.saturating_add(upper.evaluated);
+    let mut detections = lower.detections;
+
+    for candidate in upper.detections {
+        let duplicates_lower_hull = detections.iter().any(|lower| {
+            let dx = lower.center.x - candidate.center.x;
+            let dy = lower.center.y - candidate.center.y;
+            ((dx - HULL_OFFSET.x).abs() <= HULL_OFFSET_TOLERANCE
+                && (dy - HULL_OFFSET.y).abs() <= HULL_OFFSET_TOLERANCE)
+                || ((dx).abs() <= 40 && (dy).abs() <= 40)
+        });
+        if !duplicates_lower_hull {
+            detections.push(candidate);
+        }
+    }
+
+    detections.sort_by(|a, b| {
+        a.center
+            .y
+            .cmp(&b.center.y)
+            .then(a.center.x.cmp(&b.center.x))
+    });
+    detections.truncate(MAX_DETECTIONS);
+    StargateScan {
+        detections,
+        detect_ms: started.elapsed().as_millis(),
+        evaluated,
+        supported_profile: upper.supported_profile,
+    }
 }
 
 /// Scores a captured selection-panel ROI against the reference Stargate portrait.
@@ -203,6 +274,32 @@ mod tests {
                 Point::new(912, 636),
                 Point::new(1200, 636),
                 Point::new(1488, 636),
+            ]
+        );
+    }
+
+    #[test]
+    fn upper_hull_recovers_the_three_gates_hidden_by_the_bottom_hud() {
+        let frame = Frame::from_png(Path::new(
+            "tests/fixtures/stargate-bottom-hud-1080/screen.png",
+        ))
+        .expect("fixture");
+        let scan = detect_stargates(&frame);
+        let centers: Vec<Point> = scan
+            .detections
+            .iter()
+            .map(|detection| detection.center)
+            .collect();
+        assert_eq!(
+            centers,
+            vec![
+                Point::new(1128, 278),
+                Point::new(624, 566),
+                Point::new(912, 566),
+                Point::new(1344, 566),
+                Point::new(704, 682),
+                Point::new(992, 682),
+                Point::new(1280, 682),
             ]
         );
     }
