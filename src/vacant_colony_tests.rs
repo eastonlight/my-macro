@@ -2,7 +2,9 @@ use super::*;
 use crate::frame::{Rect, Rgb};
 use crate::input::InputAdapter;
 use crate::test_support::Gate;
-use crate::vision::synthetic::{PREVIEW_RED, paint_preview, paint_single, paint_slot};
+use crate::vision::synthetic::{
+    PREVIEW_RED, paint_morph_colony, paint_preview, paint_single, paint_slot,
+};
 use std::collections::HashSet;
 use std::sync::{Arc, atomic::Ordering};
 
@@ -13,6 +15,32 @@ const TERRAIN: Rgb = Rgb::new(30, 30, 30);
 /// Terrain of a "the camera moved" frame: far enough from [`TERRAIN`] that the
 /// scene-change comparison must notice it.
 const MOVED_TERRAIN: Rgb = Rgb::new(90, 90, 90);
+
+/// What the fake HUD shows after a world order, while the ordered drone is
+/// still the selected unit.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum AfterOrderPanel {
+    /// The drone reached the site and the panel becomes a morphing Colony.
+    MorphingColony,
+    /// The panel keeps showing the ordered drone (traveling or never starting).
+    StillDrone,
+    /// A lone wireframe portrait: the group state changed, not a start.
+    SingleWireframe,
+    /// A two-drone group: a smaller control group, not a start.
+    TwoDrones,
+    /// Another single unit's panel, without the morph bar.
+    OtherUnit,
+}
+
+/// One observed fake-side effect, so tests can prove the per-drone order of
+/// "issue order" and "see the morph panel".
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum Event {
+    Order(Point),
+    MorphPanel,
+    DronePanel,
+    UnconfirmedPanel,
+}
 
 /// Test desktop drives the real HUD/preview detectors, not mocked verdicts.
 /// Available to runner tests to verify the same worker and cleanup path.
@@ -50,6 +78,18 @@ pub(crate) struct Desktop {
     /// How far the game snaps the preview away from the cursor, modelling the
     /// map's tile grid. The click still lands on the preview's footprint.
     preview_offset: Point,
+    /// What the panel shows after a world order, and how many full-client
+    /// reads it takes before the morph panel appears (travel time).
+    panel: AfterOrderPanel,
+    morph_delay: usize,
+    panel_reads: usize,
+    /// True while the single selected unit is the drone that was just ordered
+    /// (the recall or a new portrait click clears it).
+    ordered_selected: bool,
+    events: Vec<Event>,
+    /// World reads so far, used to script a temporary obstruction.
+    region_reads: usize,
+    transient_red: Option<(Point, usize)>,
 }
 impl Desktop {
     /// Requests cancellation right after capture number `capture`. Only for
@@ -62,6 +102,25 @@ impl Desktop {
     /// Blocks inside capture number `capture` until `gate` is opened.
     pub(crate) fn hold_capture(mut self, capture: usize, gate: Arc<Gate>) -> Self {
         self.hold = Some((capture, gate));
+        self
+    }
+
+    /// What the fake HUD shows after a world order.
+    pub(crate) fn after_order_panel(mut self, panel: AfterOrderPanel) -> Self {
+        self.panel = panel;
+        self
+    }
+
+    /// Full-client reads after an order before the morph panel appears.
+    pub(crate) fn morph_after_reads(mut self, reads: usize) -> Self {
+        self.morph_delay = reads;
+        self
+    }
+
+    /// Models a unit that temporarily blocks one probe point: its preview is
+    /// red until `reads` world captures have happened.
+    pub(crate) fn blocked_until_reads(mut self, point: Point, reads: usize) -> Self {
+        self.transient_red = Some((point, reads));
         self
     }
 
@@ -96,6 +155,13 @@ impl Desktop {
             wrong_profile: false,
             drone: true,
             preview_offset: Point::new(0, 0),
+            panel: AfterOrderPanel::MorphingColony,
+            morph_delay: 0,
+            panel_reads: 0,
+            ordered_selected: false,
+            events: Vec::new(),
+            region_reads: 0,
+            transient_red: None,
         }
     }
 
@@ -109,6 +175,14 @@ impl Desktop {
     fn preview_center(&self) -> Point {
         self.cursor
             .offset(self.preview_offset.x, self.preview_offset.y)
+    }
+
+    /// True while a scripted temporary obstruction covers the current probe.
+    fn transient_block(&self) -> bool {
+        let Some((point, reads)) = self.transient_red else {
+            return false;
+        };
+        self.cursor == point && self.region_reads < reads
     }
 }
 impl InputAdapter for Desktop {
@@ -132,6 +206,8 @@ impl InputAdapter for Desktop {
                 self.saved = self.selected;
             } else {
                 self.selected = self.saved - u8::from(self.morphed && !self.orders.is_empty());
+                // A recall selects the remaining drones, never the ordered one.
+                self.ordered_selected = false;
             }
         }
         if key == Key::C {
@@ -160,14 +236,22 @@ impl InputAdapter for Desktop {
             } else {
                 self.selected = 1;
             }
+            self.ordered_selected = false;
         } else {
             assert!(self.preview && !self.preview_missing);
             let center = self.preview_center();
-            assert!(self.orders.len() < self.capacity && !self.blocked.contains(&center));
+            assert!(
+                self.orders.len() < self.capacity
+                    && !self.blocked.contains(&center)
+                    && !self.transient_block()
+            );
             assert!(safe_footprint(self.cursor));
             // The building lands where the preview is drawn, not where the
             // cursor happens to be inside the footprint.
             self.orders.push(center);
+            self.events.push(Event::Order(center));
+            self.panel_reads = 0;
+            self.ordered_selected = true;
             if !self.stuck_preview {
                 self.preview = false;
             }
@@ -213,6 +297,7 @@ impl DesktopAdapter for Desktop {
     }
     fn capture_region(&mut self, rect: Rect) -> Result<Frame, InputError> {
         self.begin_capture();
+        self.region_reads += 1;
         assert!(rect.w > 0 && rect.h > 0);
         Ok(self.paint(
             Frame::new(
@@ -230,7 +315,39 @@ impl DesktopAdapter for Desktop {
             return Ok(Frame::blank(1280, 720));
         }
         let mut frame = Frame::blank(1920, 1080);
-        if self.selected == 1 {
+        if self.selected == 1 && self.ordered_selected {
+            self.panel_reads += 1;
+            if self.panel_reads > self.morph_delay {
+                match self.panel {
+                    AfterOrderPanel::MorphingColony => {
+                        paint_morph_colony(&mut frame);
+                        self.events.push(Event::MorphPanel);
+                        self.morphed = true;
+                    }
+                    AfterOrderPanel::StillDrone => {
+                        paint_single(&mut frame, true);
+                        self.events.push(Event::DronePanel);
+                    }
+                    AfterOrderPanel::SingleWireframe => {
+                        paint_slot(&mut frame, 0, true);
+                        self.events.push(Event::UnconfirmedPanel);
+                    }
+                    AfterOrderPanel::TwoDrones => {
+                        for slot in 0..2 {
+                            paint_slot(&mut frame, slot, true);
+                        }
+                        self.events.push(Event::UnconfirmedPanel);
+                    }
+                    AfterOrderPanel::OtherUnit => {
+                        paint_single(&mut frame, false);
+                        self.events.push(Event::UnconfirmedPanel);
+                    }
+                }
+            } else {
+                paint_single(&mut frame, true);
+                self.events.push(Event::DronePanel);
+            }
+        } else if self.selected == 1 {
             paint_single(&mut frame, self.drone);
         } else {
             for slot in 0..self.selected {
@@ -267,17 +384,47 @@ impl Desktop {
                 frame.set_pixel(x, y, TERRAIN);
             }
         }
+        // A started building changes its own world footprint, not just HUD.
+        if self.morphed
+            && let Some(center) = self.orders.last()
+        {
+            for y in center.y - 24..center.y + 24 {
+                for x in center.x - 24..center.x + 24 {
+                    frame.set_pixel(x - origin.x, y - origin.y, Rgb::new(130, 90, 70));
+                }
+            }
+        }
         if self.preview && !self.preview_missing {
             let center = self.preview_center();
             let local = center.offset(-origin.x, -origin.y);
             if (0..frame.width() as i32).contains(&local.x)
                 && (0..frame.height() as i32).contains(&local.y)
             {
-                let green = self.orders.len() < self.capacity && !self.blocked.contains(&center);
+                let green = self.orders.len() < self.capacity
+                    && !self.blocked.contains(&center)
+                    && !self.transient_block();
                 paint_preview(&mut frame, local, green, PITCH);
             }
         }
         frame
+    }
+}
+
+/// Test budgets: a full search window, but only a few seconds of construction
+/// wait so a never-starting fake cannot slow the suite down.
+fn budgets() -> Budgets {
+    Budgets {
+        search: SEARCH_BUDGET,
+        construction: Duration::from_secs(2),
+        run: RUN_BUDGET,
+    }
+}
+
+/// Short construction window for the tests that exercise the timeout.
+fn short_construction() -> Budgets {
+    Budgets {
+        construction: Duration::from_millis(50),
+        ..budgets()
     }
 }
 
@@ -290,6 +437,14 @@ fn execute_with_progress(
     fake: &mut Desktop,
     points: &[Point],
 ) -> (VacantColonyReport, VacantProgress) {
+    execute_with_budgets(fake, points, budgets())
+}
+
+fn execute_with_budgets(
+    fake: &mut Desktop,
+    points: &[Point],
+    budgets: Budgets,
+) -> (VacantColonyReport, VacantProgress) {
     let cancel = Arc::clone(&fake.cancel);
     let progress = VacantProgress::default();
     let report = run_with_search(
@@ -297,7 +452,7 @@ fn execute_with_progress(
         &cancel,
         Timing::from_millis(0, 0),
         points,
-        SEARCH_BUDGET,
+        budgets,
         &progress,
     );
     assert!(
@@ -308,14 +463,48 @@ fn execute_with_progress(
 }
 const TWO: [Point; 2] = [Point::new(900, 400), Point::new(1044, 400)];
 
+/// The preview detector reports the painted square's bounding-box centre,
+/// which can sit one pixel from the painted centre.
+fn assert_near(actual: Point, expected: Point, context: &str) {
+    assert!(
+        (actual.x - expected.x).abs() <= 1 && (actual.y - expected.y).abs() <= 1,
+        "{context}: {actual:?} vs {expected:?}"
+    );
+}
+
 #[test]
-fn candidates_are_unique_bounded_safe_and_can_fit_twelve() {
+fn candidates_are_unique_bounded_safe_and_read_from_the_lower_left() {
     let points = candidates();
     assert!(points.len() < 250 && points.len() > 100);
+    assert!(points.iter().all(|point| safe_footprint(*point)));
+    let unique = {
+        let mut sorted = points.clone();
+        sorted.sort_by_key(|point| (point.x, point.y));
+        sorted.dedup();
+        sorted.len()
+    };
+    assert_eq!(unique, points.len(), "no candidate twice");
+    for pair in points.windows(2) {
+        let (a, b) = (pair[0], pair[1]);
+        assert!(
+            b.y < a.y || (b.y == a.y && b.x > a.x),
+            "reading order must go left to right, then up: {a:?} -> {b:?}"
+        );
+    }
+    // The first row is the lowest row the footprint allows, scanned left to
+    // right; the next row is above it.
+    let (first, second) = (points[0], points[1]);
+    assert_eq!(second.y, first.y);
+    assert!(second.x > first.x);
+    let next_row = points
+        .iter()
+        .find(|point| point.y < first.y)
+        .expect("a row above the first");
+    assert!(next_row.y < first.y);
+
+    // The order can still fit all twelve buildings.
     let mut packed = Vec::new();
-    for (i, point) in points.iter().enumerate() {
-        assert!(safe_footprint(*point));
-        assert!(!points[..i].contains(point));
+    for point in &points {
         if unreserved(*point, &packed) {
             packed.push(*point);
         }
@@ -415,14 +604,63 @@ fn scene_changes_are_refused_but_animation_near_the_preview_is_ignored() {
 }
 
 #[test]
+fn same_view_ignores_the_hud_and_minimap_but_sees_world_changes() {
+    // Two full frames with identical world terrain but different HUD/minimap
+    // pixels: only the world samples may decide, so this must pass even though
+    // the panels change completely.
+    let world = |hud: Rgb| {
+        let mut frame = Frame::blank(1920, 1080);
+        for y in (0..1080).step_by(4) {
+            for x in (0..1920).step_by(4) {
+                frame.set_pixel(x, y, TERRAIN);
+            }
+        }
+        for y in (700..1080).step_by(4) {
+            for x in (0..520).step_by(4) {
+                frame.set_pixel(x, y, hud); // minimap console
+            }
+        }
+        for y in (880..1080).step_by(4) {
+            for x in (600..1160).step_by(4) {
+                frame.set_pixel(x, y, hud); // selection panel
+            }
+        }
+        frame
+    };
+    let before = world(TERRAIN);
+    let after = world(MOVED_TERRAIN);
+    assert!(
+        same_view(&before, &after, &[]),
+        "HUD and minimap changes are not camera moves"
+    );
+
+    // A real world change above the HUD skyline is still refused.
+    let mut moved_world = before.clone();
+    for y in (100..600).step_by(4) {
+        for x in (100..1800).step_by(4) {
+            moved_world.set_pixel(x, y, MOVED_TERRAIN);
+        }
+    }
+    assert!(
+        !same_view(&before, &moved_world, &[]),
+        "a world change must be seen"
+    );
+}
+#[test]
 fn uses_two_drones_and_recalls_f4_without_overwriting_it() {
     let mut fake = Desktop::new(2);
     let report = execute(&mut fake, &TWO);
     assert_eq!(report.outcome, Outcome::Completed, "{report:?}");
     assert_eq!(report.orders.len(), 2);
+    assert_eq!(
+        report.starts, report.orders,
+        "both drones were seen starting"
+    );
     assert_eq!(report.detected, 2);
     assert_eq!(fake.keys.iter().filter(|k| **k == Key::F4).count(), 2);
-    assert_eq!(fake.removed, 1);
+    // The morph was confirmed before the group was recalled, so the game had
+    // already dropped the ordered drone and no portrait removal was needed.
+    assert_eq!(fake.removed, 0);
     assert_eq!(fake.keys.first(), Some(&Key::F4));
 }
 #[test]
@@ -431,6 +669,7 @@ fn all_twelve_drones_are_used_without_the_single_row_cap() {
     let report = execute(&mut fake, &candidates());
     assert_eq!(report.outcome, Outcome::Completed, "{report:?}");
     assert_eq!(report.orders.len(), 12);
+    assert_eq!(report.starts.len(), 12);
     assert_eq!(report.detected, 12);
     for (i, p) in report.orders.iter().enumerate() {
         assert!(unreserved(*p, &report.orders[..i]));
@@ -453,8 +692,66 @@ fn blocked_candidate_is_skipped_without_a_world_click() {
     let report = execute(&mut fake, &points);
     assert_eq!(report.outcome, Outcome::Completed, "{report:?}");
     assert_eq!(fake.orders, points[1..]);
-    assert_eq!(report.probes, 3);
+    // The blocked point is probed once per drone search that reaches it.
+    assert_eq!(report.probes, 4);
+    assert_eq!(report.starts.len(), 2);
 }
+#[test]
+fn an_earlier_candidate_is_revisited_after_a_transient_obstruction() {
+    // A unit passes over the first candidate while the first drone scans, so
+    // that drone takes the second spot. The next drone must come back to the
+    // earlier candidate instead of dropping it permanently.
+    let mut fake = Desktop::new(2).blocked_until_reads(TWO[0], 2);
+    let report = execute(&mut fake, &TWO);
+    assert_eq!(report.outcome, Outcome::Completed, "{report:?}");
+    assert_eq!(fake.orders, [TWO[1], TWO[0]]);
+    assert_eq!(report.starts.len(), 2);
+}
+#[test]
+fn a_blocked_candidate_is_revisited_once_before_it_is_dropped() {
+    // Nothing else is free: the search must revisit its own failure once
+    // before giving up, and the obstruction is gone by then.
+    let mut fake = Desktop::new(2)
+        .blocked_until_reads(TWO[0], 2)
+        .after_order_panel(AfterOrderPanel::MorphingColony);
+    fake.blocked = vec![TWO[1]];
+    // The default construction window: this test is about the retry, and the
+    // fake shows the morph panel immediately.
+    let report = execute(&mut fake, &TWO);
+    assert_eq!(report.orders.len(), 1, "{report:?}");
+    assert_near(report.orders[0], TWO[0], "ordered the revisited candidate");
+    assert_eq!(report.starts.len(), 1);
+    assert_near(
+        report.starts[0],
+        TWO[0],
+        "start evidence for the same order",
+    );
+    // The first drone probes both candidates, revisits the obstructed one,
+    // then the second drone spends one probe on the still-blocked candidate.
+    assert_eq!(report.probes, 4, "one revisit of the blocked first pass");
+}
+#[test]
+fn a_free_spot_far_to_the_right_is_still_reached_in_the_first_pass() {
+    // The whole lower row up to x=1488 is blocked, so the only free spot sits
+    // six tiles further right. The ordered scan must reach it in one pass:
+    // reserving probes for the delayed revisit must not truncate the reading
+    // order, or a view with space would report "no free position".
+    let blocked: Vec<Point> = (0..20).map(|i| Point::new(120 + i * 72, 400)).collect();
+    let free = Point::new(1776, 400);
+    assert!(blocked.iter().all(|point| safe_footprint(*point)));
+    assert!(safe_footprint(free));
+    let mut fake = Desktop::new(2);
+    fake.blocked = blocked.clone();
+    let points: Vec<Point> = blocked.into_iter().chain([free]).collect();
+    let report = execute(&mut fake, &points);
+    assert_eq!(fake.orders.len(), 1, "{report:?}");
+    assert_near(fake.orders[0], free, "the far free spot was found");
+    assert_eq!(report.starts.len(), 1, "{report:?}");
+    // 21 probes in the first pass reach index 20 (the free spot); the second
+    // drone then scans the same blocked row and its single revisit fails.
+    assert_eq!(report.probes, 21 + 20, "{report:?}");
+}
+
 #[test]
 fn no_creep_or_no_free_space_never_forces_a_click() {
     let mut fake = Desktop::new(2);
@@ -462,7 +759,9 @@ fn no_creep_or_no_free_space_never_forces_a_click() {
     let report = execute(&mut fake, &TWO);
     assert!(matches!(report.outcome, Outcome::Aborted { .. }));
     assert!(report.orders.is_empty());
-    assert_eq!(report.probes, TWO.len());
+    assert!(report.starts.is_empty());
+    // Two candidates, each probed in the first pass and once revisited.
+    assert_eq!(report.probes, 4);
     assert_eq!(
         fake.keys.last(),
         Some(&Key::Escape),
@@ -485,7 +784,10 @@ fn partial_run_reports_issued_orders_not_completed_buildings() {
     let report = execute(&mut fake, &TWO);
     assert!(matches!(report.outcome, Outcome::Aborted { .. }));
     assert_eq!(report.orders.len(), 1);
+    assert_eq!(report.starts.len(), 1);
     assert_eq!(report.detected, 2);
+    // The second drone was never ordered, so "starts" cannot equal "detected".
+    assert!(report.starts.len() < report.detected as usize);
 }
 #[test]
 fn stuck_preview_stops_after_one_order_without_retrying_the_click() {
@@ -494,7 +796,153 @@ fn stuck_preview_stops_after_one_order_without_retrying_the_click() {
     let report = execute(&mut fake, &TWO);
     assert!(matches!(report.outcome, Outcome::Aborted { .. }));
     assert_eq!(report.orders.len(), 1);
+    assert!(report.starts.is_empty(), "no start evidence was shown");
+    assert_eq!(fake.orders.len(), 1, "no re-click of the stuck order");
     assert_eq!(fake.keys.last(), Some(&Key::Escape));
+}
+#[test]
+fn a_never_starting_drone_stops_with_a_partial_report_and_keeps_the_reservation() {
+    let mut fake = Desktop::new(2).after_order_panel(AfterOrderPanel::StillDrone);
+    let (report, progress) = execute_with_budgets(&mut fake, &TWO, short_construction());
+    assert!(matches!(report.outcome, Outcome::Aborted { .. }));
+    // The issued order and its reservation survive the failed confirmation.
+    assert_eq!(report.orders.len(), 1, "{report:?}");
+    assert_near(report.orders[0], TWO[0], "the reservation is kept");
+    assert_eq!(fake.orders, [TWO[0]]);
+    assert!(report.starts.is_empty());
+    assert_eq!(progress.orders(), 1);
+    assert_eq!(progress.starts(), 0);
+    // One B/C pair only: the next drone was never touched, and the click was
+    // never retried.
+    assert_eq!(fake.keys.iter().filter(|k| **k == Key::B).count(), 1);
+    assert_eq!(fake.keys.iter().filter(|k| **k == Key::C).count(), 1);
+}
+#[test]
+fn departure_preview_closure_and_smaller_groups_are_not_start_evidence() {
+    for panel in [
+        AfterOrderPanel::StillDrone,
+        AfterOrderPanel::SingleWireframe,
+        AfterOrderPanel::TwoDrones,
+        AfterOrderPanel::OtherUnit,
+    ] {
+        let mut fake = Desktop::new(2).after_order_panel(panel);
+        let (report, _) = execute_with_budgets(&mut fake, &TWO, short_construction());
+        assert!(
+            matches!(report.outcome, Outcome::Aborted { .. }),
+            "{panel:?}: {:?}",
+            report.outcome
+        );
+        assert_eq!(report.orders.len(), 1, "{panel:?}");
+        assert!(report.starts.is_empty(), "{panel:?}: no positive start");
+        assert_eq!(fake.orders.len(), 1, "{panel:?}");
+        assert!(
+            !fake.keys.contains(&Key::Escape),
+            "{panel:?}: the preview was already closed"
+        );
+    }
+}
+#[test]
+fn no_second_order_before_the_first_morph_is_confirmed() {
+    // The fake keeps showing the selected drone for two reads after the order
+    // (travel time), then the morph panel. The second drone must not be
+    // ordered before two consecutive morph reads are seen.
+    let mut fake = Desktop::new(2).morph_after_reads(2);
+    let report = execute(&mut fake, &TWO);
+    assert_eq!(report.outcome, Outcome::Completed, "{report:?}");
+    assert_eq!(report.starts.len(), 2);
+
+    let first_order = fake
+        .events
+        .iter()
+        .position(|event| matches!(event, Event::Order(_)))
+        .expect("first order");
+    let second_order = fake
+        .events
+        .iter()
+        .skip(first_order + 1)
+        .position(|event| matches!(event, Event::Order(_)))
+        .map(|index| index + first_order + 1)
+        .expect("second order");
+    let morphs = fake
+        .events
+        .iter()
+        .enumerate()
+        .filter(|(index, event)| {
+            *index > first_order && *index < second_order && **event == Event::MorphPanel
+        })
+        .count();
+    assert!(
+        morphs >= CONSTRUCTION_CONFIRM_READS,
+        "the second order arrived after {morphs} morph reads: {:?}",
+        fake.events
+    );
+    let drone_reads = fake
+        .events
+        .iter()
+        .enumerate()
+        .filter(|(index, event)| {
+            *index > first_order && *index < second_order && **event == Event::DronePanel
+        })
+        .count();
+    assert!(
+        drone_reads >= 2,
+        "the wait must actually observe the traveling drone first: {:?}",
+        fake.events
+    );
+}
+#[test]
+fn twelve_drones_confirm_each_morph_before_the_next_order() {
+    let mut fake = Desktop::new(12);
+    let report = execute(&mut fake, &candidates());
+    assert_eq!(report.outcome, Outcome::Completed, "{report:?}");
+    assert_eq!(report.orders.len(), 12);
+    assert_eq!(report.starts.len(), 12);
+    // Every order except the last is followed by at least two morph reads
+    // before the next order.
+    let orders: Vec<usize> = fake
+        .events
+        .iter()
+        .enumerate()
+        .filter(|(_, event)| matches!(event, Event::Order(_)))
+        .map(|(index, _)| index)
+        .collect();
+    assert_eq!(orders.len(), 12);
+    for pair in orders.windows(2) {
+        let morphs = fake.events[pair[0] + 1..pair[1]]
+            .iter()
+            .filter(|event| **event == Event::MorphPanel)
+            .count();
+        assert!(
+            morphs >= CONSTRUCTION_CONFIRM_READS,
+            "order at {} was followed by {morphs} morph reads",
+            pair[0]
+        );
+    }
+}
+#[test]
+fn construction_wait_cancellation_and_focus_loss_are_bounded() {
+    // Capture 10 is the first construction panel read after the order.
+    let mut fake = Desktop::new(2).cancel_after_captures(10);
+    let report = execute_with_budgets(&mut fake, &TWO, short_construction()).0;
+    assert_eq!(report.outcome, Outcome::Cancelled, "{report:?}");
+    assert_eq!(report.orders.len(), 1, "the issued order is kept");
+    assert_near(report.orders[0], TWO[0], "the issued order is kept");
+    assert!(report.starts.is_empty());
+
+    let mut fake = Desktop::new(2);
+    fake.lose_focus_capture = Some(11);
+    let report = execute_with_budgets(&mut fake, &TWO, short_construction()).0;
+    assert!(
+        matches!(report.outcome, Outcome::Failed { .. }),
+        "{report:?}"
+    );
+    assert_eq!(report.orders.len(), 1);
+    assert_near(
+        report.orders[0],
+        TWO[0],
+        "the reservation survives focus loss",
+    );
+    assert!(report.starts.is_empty());
 }
 #[test]
 fn invalid_selection_and_geometry_send_no_keys_or_clicks() {
@@ -515,7 +963,10 @@ fn invalid_selection_and_geometry_send_no_keys_or_clicks() {
 }
 #[test]
 fn cancellation_after_either_preview_capture_sends_no_world_click() {
-    for capture in [1, 6, 7] {
+    // Captures 1-7 are the reads before the first world click: the initial
+    // selection, the saved view, the F4 count, the single-drone check, the
+    // baseline, and the two preview frames.
+    for capture in [1, 5, 6, 7] {
         let mut fake = Desktop::new(2).cancel_after_captures(capture);
         let report = execute(&mut fake, &TWO);
         assert_eq!(report.outcome, Outcome::Cancelled, "capture {capture}");
@@ -569,7 +1020,10 @@ fn expired_search_budget_is_reported_without_a_build_order() {
         &cancel,
         Timing::from_millis(0, 0),
         &TWO,
-        Duration::ZERO,
+        Budgets {
+            search: Duration::ZERO,
+            ..budgets()
+        },
         &VacantProgress::default(),
     );
     assert!(matches!(report.outcome, Outcome::Aborted { .. }));
@@ -605,8 +1059,10 @@ fn a_green_square_more_than_a_tile_away_belongs_to_another_footprint() {
     let report = execute(&mut fake, &TWO);
     assert!(matches!(report.outcome, Outcome::Aborted { .. }));
     assert!(report.orders.is_empty());
-    assert_eq!(report.probes, TWO.len());
-    assert!(!fake.keys.contains(&Key::B) || !fake.orders.iter().any(|_| true));
+    assert_eq!(report.probes, 4, "both candidates, first pass and revisit");
+    // B/C were pressed for the drone, but no world click was ever sent.
+    assert_eq!(fake.keys.iter().filter(|k| **k == Key::B).count(), 1);
+    assert!(fake.orders.is_empty());
 }
 
 #[test]
@@ -631,21 +1087,19 @@ fn a_search_that_never_confirms_a_preview_stops_early_with_a_diagnostic() {
 }
 
 #[test]
-fn the_probe_limit_stops_a_long_search() {
+fn the_per_drone_probe_limit_stops_a_long_search() {
     // One order succeeds, then the view has no room left. A dense grid offers
-    // far more candidates than the limit allows, so the search must end at the
-    // limit instead of walking every point.
+    // far more candidates than one drone may probe, so the second search ends
+    // at the per-drone limit instead of walking every point twice.
     let mut fake = Desktop::new(2);
     fake.capacity = 1;
-    // Start below the top edge: `safe_footprint` is re-checked on the detected
-    // (snapped) centre, which can differ from the probe point by a pixel.
     let dense: Vec<Point> = (180..720)
         .step_by(36)
         .flat_map(|y| (120..1800).step_by(36).map(move |x| Point::new(x, y)))
         .filter(|point| safe_footprint(*point))
         .collect();
     assert!(
-        dense.len() > MAX_PROBES + 16,
+        dense.len() > MAX_PROBES_PER_DRONE + 16,
         "the test needs more candidates than the limit: {}",
         dense.len()
     );
@@ -655,7 +1109,34 @@ fn the_probe_limit_stops_a_long_search() {
     };
     assert!(detail.contains("probe limit"), "{detail}");
     assert_eq!(report.orders.len(), 1, "the one real spot was still built");
-    assert_eq!(report.probes, MAX_PROBES);
+    assert_eq!(report.probes, MAX_PROBES_PER_DRONE + 1);
+}
+
+#[test]
+fn the_probe_limits_are_gated_before_every_probe() {
+    let search = Search::new(&TWO, budgets());
+    let mut report = VacantColonyReport {
+        outcome: Outcome::Completed,
+        detected: 2,
+        orders: Vec::new(),
+        starts: Vec::new(),
+        probes: MAX_PROBES,
+    };
+    let Outcome::Aborted { detail } = search.budget_gate(&report, 0).unwrap_err() else {
+        panic!("the run cap must abort");
+    };
+    assert!(detail.contains("probe limit"), "{detail}");
+
+    report.probes = 0;
+    let Outcome::Aborted { detail } = search
+        .budget_gate(&report, MAX_PROBES_PER_DRONE)
+        .unwrap_err()
+    else {
+        panic!("the per-drone cap must abort");
+    };
+    assert!(detail.contains("probe limit"), "{detail}");
+
+    search.budget_gate(&report, 0).expect("under both caps");
 }
 
 #[test]
@@ -665,11 +1146,21 @@ fn the_live_counters_track_the_search() {
     assert_eq!(report.outcome, Outcome::Completed, "{report:?}");
     assert_eq!(progress.probes(), report.probes);
     assert_eq!(progress.orders(), report.orders.len());
+    assert_eq!(progress.starts(), report.starts.len());
     assert_eq!(progress.confirmed(), report.orders.len());
+    assert_eq!(progress.starts(), report.orders.len());
     assert!(progress.probes() >= report.orders.len());
 
     // A fresh run resets them, so the GUI never shows the previous run's numbers.
     let mut fake = Desktop::new(0);
     let (_, progress) = execute_with_progress(&mut fake, &TWO);
-    assert_eq!((progress.probes(), progress.orders()), (0, 0));
+    assert_eq!(
+        (
+            progress.probes(),
+            progress.orders(),
+            progress.starts(),
+            progress.confirmed()
+        ),
+        (0, 0, 0, 0)
+    );
 }

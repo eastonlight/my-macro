@@ -113,6 +113,54 @@ const SINGLE_DRONE_PORTRAIT_MASK: [&str; MASK_SIDE as usize] = [
     "..########......",
 ];
 
+/// Screen rectangle of the morph progress bar in the single-unit information
+/// panel while a Creep Colony is still under construction. Calibrated from
+/// `not-drone-colony.png` (crop `(600, 880)`, bar border `(232, 82)`..`(484, 99)`).
+const MORPH_BAR: Rect = Rect::new(832, 960, 252, 22);
+/// Minimum saturated-orange pixels in [`MORPH_BAR`] for the bar frame. The real
+/// capture scores 996; a drone panel scores 0.
+const MORPH_BAR_MIN_PIXELS: usize = 200;
+/// Minimum horizontal span of the orange bar frame. The real capture spans 236.
+const MORPH_BAR_MIN_SPAN: i32 = 180;
+/// Blue/violet silhouette from `not-drone-colony.png`, crop origin (600,880).
+/// Each cell is 4x4px, occupied by >=3 blue pixels. Match the whole portrait,
+/// not merely a blue patch shared by unrelated Zerg buildings.
+const COLONY_PORTRAIT: Rect = Rect::new(608, 880, 160, 128);
+const COLONY_MASK: [&str; 32] = [
+    "........................................",
+    "........................................",
+    "...............#.......##...............",
+    "..............##.....#####..............",
+    "......##...#..####..########............",
+    ".......###########..#########...........",
+    ".......######################...........",
+    ".......#####################...#........",
+    ".......######################.##........",
+    ".......######################.##........",
+    ".......#########################...#....",
+    ".......#########################..##....",
+    ".......############################.....",
+    ".......############################.....",
+    ".......###########################......",
+    "......###########################.......",
+    "......##########################........",
+    "......##########################........",
+    ".....#############################......",
+    ".....##############################.....",
+    ".....################################...",
+    "....#################################...",
+    "...#########################.########...",
+    "...########################...#####.....",
+    "....###.####..####################......",
+    "..............###############.####......",
+    ".............################.####......",
+    ".............#################.###......",
+    ".............#################..........",
+    ".....................####..#####........",
+    "..............................##........",
+    "........................................",
+];
+
 /// Smallest search radius around the cursor for a placement preview. The real
 /// radius grows with the footprint, so a 3×3 building is still found.
 const PREVIEW_SEARCH_MIN: i32 = 176;
@@ -178,6 +226,30 @@ impl RejectReason {
             Self::UncertainSingle => "the selected single unit is not a drone; refusing to build",
         }
     }
+}
+
+/// What the selection HUD says about a drone that was just ordered to build.
+///
+/// Only [`Self::MorphingColony`] is positive construction-start evidence. It
+/// is calibrated from the single real capture `not-drone-colony.png` (a
+/// selected morphing Creep Colony at 59/400 HP): no wireframe slot is
+/// occupied, the information-panel portrait is colony-blue, and the morph
+/// progress bar is drawn where that panel puts it. Every other state — a
+/// still-selected drone, a group of any size, a tooltip, a blank or wrong
+/// frame — reads [`Self::Unconfirmed`] and must never be counted as a start.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ConstructionStart {
+    /// The single-unit panel shows a Creep Colony that is still morphing.
+    MorphingColony {
+        /// Saturated-orange morph-bar pixels found in [`MORPH_BAR`].
+        bar_pixels: usize,
+        /// Matched Colony silhouette cells after coverage/IoU verification.
+        colony_cells: usize,
+    },
+    /// The panel still shows the ordered drone.
+    DroneSelected,
+    /// No positive evidence; the caller must not count a construction start.
+    Unconfirmed,
 }
 
 /// What the placement preview looks like near a target.
@@ -311,6 +383,117 @@ fn slot_occupied(frame: &Frame, slot: u8) -> bool {
 fn single_portrait_is_drone(frame: &Frame) -> bool {
     let (agreement, cells) = best_mask_match(frame, SINGLE_PORTRAIT, SINGLE_DRONE_PORTRAIT_MASK);
     agreement >= SINGLE_MIN_AGREEMENT && cells >= SINGLE_MIN_CELLS
+}
+
+/// Reads the selection HUD of a full client frame for positive evidence that
+/// the drone that was just given a Colony order has started morphing.
+///
+/// This is deliberately stricter than “not a drone”: a closed preview, a
+/// departing drone, a lost selection or a smaller drone group all read
+/// [`ConstructionStart::Unconfirmed`], never a start. The only accepted panel
+/// is the morphing Colony signature measured against the one real capture in
+/// `tests/fixtures/remastered-1080`; that calibration is an evidence limit,
+/// not a proof of live morph detection.
+pub fn detect_construction_start(frame: &Frame) -> ConstructionStart {
+    if frame.width() != CLIENT_WIDTH
+        || frame.height() != CLIENT_HEIGHT
+        || frame.origin() != Point::new(0, 0)
+    {
+        return ConstructionStart::Unconfirmed;
+    }
+    if frame.is_blank() {
+        return ConstructionStart::Unconfirmed;
+    }
+    // The wireframe grid and the single-unit panel overlap on screen, so slot
+    // occupancy alone cannot separate them. The group/drone readings are the
+    // reliable negative: anything the selection detector recognizes as a drone
+    // (or a drone group) is not construction evidence.
+    match detect_selection(frame) {
+        SelectionRead::SingleDrone => return ConstructionStart::DroneSelected,
+        SelectionRead::Drones { .. } => return ConstructionStart::Unconfirmed,
+        SelectionRead::Rejected(_) => {}
+    }
+
+    let (bar_pixels, bar_span) = morph_bar_readout(frame);
+    let colony_cells = colony_portrait_cells(frame);
+    if bar_pixels >= MORPH_BAR_MIN_PIXELS && bar_span >= MORPH_BAR_MIN_SPAN && colony_cells > 0 {
+        ConstructionStart::MorphingColony {
+            bar_pixels,
+            colony_cells,
+        }
+    } else {
+        ConstructionStart::Unconfirmed
+    }
+}
+
+/// Saturated-orange pixels of the morph bar, and how wide they span.
+fn morph_bar_readout(frame: &Frame) -> (usize, i32) {
+    let mut pixels = 0usize;
+    let mut min_x = i32::MAX;
+    let mut max_x = i32::MIN;
+    for y in MORPH_BAR.y..MORPH_BAR.bottom() {
+        for x in MORPH_BAR.x..MORPH_BAR.right() {
+            if frame
+                .pixel_at_screen(Point::new(x, y))
+                .is_some_and(is_morph_bar)
+            {
+                pixels += 1;
+                min_x = min_x.min(x);
+                max_x = max_x.max(x);
+            }
+        }
+    }
+    let span = if pixels == 0 { 0 } else { max_x - min_x + 1 };
+    (pixels, span)
+}
+
+/// Whole-silhouette match with foreground coverage AND intersection-over-union.
+/// A broad blue rectangle, a tiny patch, and a different blue portrait are not
+/// sufficient. Small alignment shifts are tolerated; unknown skins fail closed.
+fn colony_portrait_cells(frame: &Frame) -> usize {
+    let mut best = 0;
+    for oy in [-2, 0, 2] {
+        for ox in [-2, 0, 2] {
+            let (mut wanted, mut overlap, mut union) = (0, 0, 0);
+            for (gy, row) in COLONY_MASK.iter().enumerate() {
+                for (gx, cell) in row.bytes().enumerate() {
+                    let mut blue = 0;
+                    for dy in 0..4 {
+                        for dx in 0..4 {
+                            let p = Point::new(
+                                COLONY_PORTRAIT.x + gx as i32 * 4 + dx + ox,
+                                COLONY_PORTRAIT.y + gy as i32 * 4 + dy + oy,
+                            );
+                            blue +=
+                                usize::from(frame.pixel_at_screen(p).is_some_and(is_colony_body));
+                        }
+                    }
+                    let expected = cell == b'#';
+                    let actual = blue >= 3;
+                    wanted += usize::from(expected);
+                    overlap += usize::from(expected && actual);
+                    union += usize::from(expected || actual);
+                }
+            }
+            if overlap * 100 >= wanted * 80 && overlap * 100 >= union * 65 {
+                best = best.max(overlap);
+            }
+        }
+    }
+    best
+}
+
+/// Colony-blue natural palette (the Zerg colony sprite is blue/violet, where
+/// the drone is red).
+fn is_colony_body(pixel: Rgb) -> bool {
+    let (r, g, b) = (i32::from(pixel.r), i32::from(pixel.g), i32::from(pixel.b));
+    b > 60 && b - r > 25 && b - g > 15
+}
+
+/// Saturated orange of the morph progress bar frame.
+fn is_morph_bar(pixel: Rgb) -> bool {
+    let (r, g, b) = (i32::from(pixel.r), i32::from(pixel.g), i32::from(pixel.b));
+    r > 150 && g > 50 && r - g > 40 && g - b > 40
 }
 
 /// Best (agreement, red cells) over the small alignment offsets.
@@ -499,6 +682,9 @@ pub(crate) mod synthetic {
     /// Blocked placement preview overlay.
     pub(crate) const PREVIEW_RED: Rgb = Rgb::new(200, 30, 30);
 
+    /// Saturated orange of the morph progress-bar frame.
+    pub(crate) const MORPH_BAR_ORANGE: Rgb = Rgb::new(216, 96, 0);
+
     /// A selection crop (550×200 at `(600, 880)`) placed in a client frame.
     pub(crate) fn selection_fixture(name: &str) -> Frame {
         load_fixture(name, 600, 880)
@@ -562,6 +748,37 @@ pub(crate) mod synthetic {
                     if dx * dx + dy * dy <= 34 * 34 {
                         frame.set_pixel(SINGLE_PORTRAIT.x + dx, SINGLE_PORTRAIT.y + dy, color);
                     }
+                }
+            }
+        }
+    }
+
+    /// Paints the single-unit information panel as a morphing Creep Colony:
+    /// the non-drone portrait plus the calibrated morph progress-bar frame.
+    pub(crate) fn paint_morph_colony(frame: &mut Frame) {
+        for (gy, row) in COLONY_MASK.iter().enumerate() {
+            for (gx, cell) in row.bytes().enumerate() {
+                if cell == b'#' {
+                    for dy in 0..4 {
+                        for dx in 0..4 {
+                            frame.set_pixel(
+                                COLONY_PORTRAIT.x + gx as i32 * 4 + dx,
+                                COLONY_PORTRAIT.y + gy as i32 * 4 + dy,
+                                Rgb::new(20, 30, 140),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        for y in MORPH_BAR.y..MORPH_BAR.bottom() {
+            for x in MORPH_BAR.x..MORPH_BAR.right() {
+                let border = y < MORPH_BAR.y + 3
+                    || y >= MORPH_BAR.bottom() - 3
+                    || x < MORPH_BAR.x + 3
+                    || x >= MORPH_BAR.right() - 3;
+                if border {
+                    frame.set_pixel(x, y, MORPH_BAR_ORANGE);
                 }
             }
         }
@@ -810,6 +1027,106 @@ mod tests {
         assert_eq!(
             detect_placement(&cleared, target, FOOTPRINT),
             Placement::Absent
+        );
+    }
+
+    #[test]
+    fn construction_start_accepts_the_real_morphing_colony_panel() {
+        let frame = selection_fixture("not-drone-colony.png");
+        let ConstructionStart::MorphingColony {
+            bar_pixels,
+            colony_cells,
+        } = detect_construction_start(&frame)
+        else {
+            panic!("the real morphing-colony panel must be positive");
+        };
+        assert!(bar_pixels >= MORPH_BAR_MIN_PIXELS, "{bar_pixels}");
+        assert!(colony_cells >= 200, "{colony_cells}");
+    }
+
+    #[test]
+    fn construction_start_refuses_every_real_negative_panel() {
+        assert_eq!(
+            detect_construction_start(&selection_fixture("drone-single.png")),
+            ConstructionStart::DroneSelected
+        );
+        for name in [
+            "drones-2.png",
+            "drones-3.png",
+            "drones-4.png",
+            "drones-5.png",
+            "drones-5-tooltip.png",
+            "preview-first.png",
+            "preview-second.png",
+            "no-preview.png",
+        ] {
+            let frame = if name.starts_with("drones") {
+                selection_fixture(name)
+            } else {
+                placement_fixture(name)
+            };
+            assert_eq!(
+                detect_construction_start(&frame),
+                ConstructionStart::Unconfirmed,
+                "{name}"
+            );
+        }
+        assert_eq!(
+            detect_construction_start(&Frame::blank(CLIENT_WIDTH, CLIENT_HEIGHT)),
+            ConstructionStart::Unconfirmed
+        );
+        assert_eq!(
+            detect_construction_start(&Frame::blank(1280, 720)),
+            ConstructionStart::Unconfirmed
+        );
+    }
+
+    #[test]
+    fn construction_start_accepts_only_the_synthetic_morph_panel() {
+        let mut morph = Frame::blank(CLIENT_WIDTH, CLIENT_HEIGHT);
+        paint_morph_colony(&mut morph);
+        assert!(matches!(
+            detect_construction_start(&morph),
+            ConstructionStart::MorphingColony { .. }
+        ));
+
+        let mut drone = Frame::blank(CLIENT_WIDTH, CLIENT_HEIGHT);
+        paint_single(&mut drone, true);
+        assert_eq!(
+            detect_construction_start(&drone),
+            ConstructionStart::DroneSelected
+        );
+
+        // A non-drone portrait without the morph bar is another unit, not
+        // positive construction evidence.
+        let mut other = Frame::blank(CLIENT_WIDTH, CLIENT_HEIGHT);
+        paint_single(&mut other, false);
+        assert_eq!(
+            detect_construction_start(&other),
+            ConstructionStart::Unconfirmed
+        );
+
+        // A group panel (for example a smaller control group) is never a start.
+        let mut group = Frame::blank(CLIENT_WIDTH, CLIENT_HEIGHT);
+        for slot in 0..2 {
+            paint_slot(&mut group, slot, true);
+        }
+        assert_eq!(
+            detect_construction_start(&group),
+            ConstructionStart::Unconfirmed
+        );
+
+        // Orange pixels outside the calibrated bar rectangle are ignored.
+        let mut misplaced = Frame::blank(CLIENT_WIDTH, CLIENT_HEIGHT);
+        paint_single(&mut misplaced, false);
+        for y in 200..240 {
+            for x in 200..460 {
+                misplaced.set_pixel(x, y, MORPH_BAR_ORANGE);
+            }
+        }
+        assert_eq!(
+            detect_construction_start(&misplaced),
+            ConstructionStart::Unconfirmed
         );
     }
 }

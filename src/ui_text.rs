@@ -200,6 +200,7 @@ pub struct Labels {
     pub notes_heading: &'static str,
     pub vacant_colony_sequence_label: &'static str,
     pub vacant_colony_search_step_label: &'static str,
+    pub vacant_colony_confirm_step_label: &'static str,
     pub vacant_colony_caveat: &'static str,
     pub note_select_drone: &'static str,
     pub note_chat: &'static str,
@@ -316,7 +317,8 @@ impl Labels {
             notes_heading: "사용 전 확인",
             vacant_colony_sequence_label: "한 번 실행",
             vacant_colony_search_step_label: "빈자리 탐색·검증",
-            vacant_colony_caveat: "미리보기가 확인된 곳에만 클릭합니다(강행 없음). 게임에서 실기 검증 전이며, 화면 한 장만 탐색합니다.",
+            vacant_colony_confirm_step_label: "변이 시작 확인",
+            vacant_colony_caveat: "미리보기가 확인된 곳에만 클릭합니다(강행 없음). 변이 시작 확인은 실제 캡처 1장으로 보정한 패널 판정이며 실기 검증 전입니다. 화면 한 장만 탐색합니다.",
             note_select_drone: "드론 2~12기를 선택한 뒤 트리거 단축키를 누르면 커서 자리부터 오른쪽으로 한 줄로 지어집니다. 실행키(기본 F6)는 게임의 F4 저장 화면으로 이동해 빈자리를 검증하며 지으므로, 먼저 게임에서 F4 화면을 지정해 두세요. 좌표는 저장하지 않습니다.",
             note_chat: "게임 채팅이나 입력 중에는 사용하지 마세요. 채팅 상태를 감지하지 못합니다.",
             note_online: "온라인/랭크/토너먼트 경기에서는 규정 위반이 될 수 있습니다. README를 먼저 확인하세요.",
@@ -432,7 +434,8 @@ impl Labels {
             notes_heading: "Before you use it",
             vacant_colony_sequence_label: "one run",
             vacant_colony_search_step_label: "probe and verify free space",
-            vacant_colony_caveat: "Clicks only where a fresh preview is confirmed (no forced clicks). Not live-validated in game yet; it searches a single screen.",
+            vacant_colony_confirm_step_label: "confirm morph start",
+            vacant_colony_caveat: "Clicks only where a fresh preview is confirmed (no forced clicks). Morph-start confirmation is a panel classifier calibrated from one real capture; not live-validated. It searches a single screen.",
             note_select_drone: "Select 2-12 drones, then press the trigger key to build a row to the right of the cursor. The third key (default F6) recalls the game's saved F4 view and only builds on verified free space, so save that view in game first. No coordinate is stored.",
             note_chat: "Do not use while typing in game chat: chat state is not detected.",
             note_online: "May violate online/ranked/tournament rules. Read the README first.",
@@ -483,23 +486,28 @@ impl Labels {
     pub fn vacant_colony_hint(&self) -> &'static str {
         match self.lang {
             Lang::Korean => {
-                "크립과 여유 공간이 있는 화면을 게임의 F4에 미리 저장하세요. 드론 2~12기 선택 → 실행키 → F4 이동 → 초록 미리보기 확인 후 건설 명령. 그룹 9 사용 · 강행 없음 · 같은 타이밍 사용. F4는 실행키로 지정할 수 없습니다. 빈자리 탐색은 최대 45초, 실기 검증 전입니다."
+                "크립과 여유 공간이 있는 화면을 게임의 F4에 미리 저장하세요. 드론 2~12기 선택 → 실행키 → F4 이동 → 왼쪽 아래부터 오른쪽으로, 다음 줄은 위로 탐색 → 초록 미리보기 두 번 확인 → 건설 명령 → 그 드론의 변이 시작(콜로니 패널) 확인 후 다음 드론. 그룹 9 사용 · 강행 없음 · 같은 타이밍 사용. F4는 실행키로 지정할 수 없습니다. 탐색 최대 60초 · 드론당 변이 대기 최대 30초(캡처가 끝날 때까지 멈출 수 없어 초과할 수 있음) · 실기 검증 전입니다."
             }
             Lang::English => {
-                "Save a view with creep and free space to in-game F4 first. Select 2–12 drones, then trigger: F4 → probe → verified green preview → Colony order. Uses group 9 and shared timing; never forces placement. F4 stays reserved for the game. Search budget: 45s. Not live-validated yet."
+                "Save a view with creep and free space to in-game F4 first. Select 2–12 drones, then trigger: F4 → search from the lower left to the right, then up → confirm a stable green preview twice → Colony order → wait for that drone's morph panel before the next drone. Uses group 9 and shared timing; never forces placement. F4 stays reserved for the game. Search budget 60s, per-drone morph wait 30s; blocking captures cannot be interrupted, so waits can overshoot. Not live-validated yet."
             }
         }
     }
 
-    /// Live counters of a running F4 search: probes and issued orders. Shown so
-    /// a long sweep is visibly progressing instead of looking stuck.
-    pub fn vacant_colony_progress(&self, probes: usize, orders: usize) -> String {
+    /// Live counters of a running F4 search: probes, issued orders and
+    /// confirmed morph starts. Shown so a long sweep is visibly progressing
+    /// instead of looking stuck.
+    pub fn vacant_colony_progress(&self, probes: usize, orders: usize, starts: usize) -> String {
         match self.lang {
             Lang::Korean => {
-                format!("검사 {probes}곳 · 보낸 명령 {orders}개 (건설 완료 아님)")
+                format!(
+                    "검사 {probes}곳 · 보낸 명령 {orders}개 · 변이 시작 확인 {starts}개 (건설 완료 아님)"
+                )
             }
             Lang::English => {
-                format!("{probes} probes · {orders} orders (not completed buildings)")
+                format!(
+                    "{probes} probes · {orders} orders · {starts} morphs confirmed started (not completed buildings)"
+                )
             }
         }
     }
@@ -536,15 +544,17 @@ impl Labels {
         };
         let progress = match self.lang {
             Lang::Korean => format!(
-                "명령 {}/{} · 검사 {}곳 · 건설 완료 수 아님",
+                "명령 {}/{} · 변이 시작 확인 {}개 · 검사 {}곳 · 건설 완료 수 아님",
                 report.orders.len(),
                 report.detected,
+                report.starts.len(),
                 report.probes
             ),
             Lang::English => format!(
-                "{}/{} orders, {} probes (not completed buildings)",
+                "{}/{} orders, {} confirmed construction starts, {} probes (not completed buildings)",
                 report.orders.len(),
                 report.detected,
+                report.starts.len(),
                 report.probes
             ),
         };
@@ -1487,31 +1497,44 @@ mod tests {
     #[test]
     fn the_third_feature_result_never_claims_completed_buildings() {
         let report =
-            |outcome: Outcome, orders: usize, detected: u8, probes: usize| VacantColonyReport {
-                outcome,
-                detected,
-                orders: vec![Point::new(900, 400); orders],
-                probes,
+            |outcome: Outcome, orders: usize, starts: usize, detected: u8, probes: usize| {
+                VacantColonyReport {
+                    outcome,
+                    detected,
+                    orders: vec![Point::new(900, 400); orders],
+                    starts: vec![Point::new(900, 400); starts],
+                    probes,
+                }
             };
 
         let labels = Labels::korean();
-        let (level, text) = labels.vacant_colony_result(&report(Outcome::Completed, 3, 4, 12));
+        let (level, text) = labels.vacant_colony_result(&report(Outcome::Completed, 3, 3, 4, 12));
         assert_eq!(level, NoticeLevel::Ok);
         assert!(text.contains("3/4"), "{text}");
         assert!(text.contains("12"), "{text}");
+        assert!(
+            text.contains("변이 시작 확인 3개"),
+            "the confirmed starts must be visible: {text}"
+        );
         assert!(
             text.contains("건설 완료 수 아님"),
             "an issued order is not a finished building: {text}"
         );
 
-        let (level, text) = labels.vacant_colony_result(&report(Outcome::Cancelled, 1, 4, 30));
+        // A partial run: one order issued, but construction was not confirmed.
+        let (level, text) = labels.vacant_colony_result(&report(Outcome::Cancelled, 1, 0, 4, 30));
         assert_eq!(level, NoticeLevel::Info, "a partial run is not a success");
         assert!(text.contains("1/4"), "{text}");
+        assert!(
+            text.contains("변이 시작 확인 0개"),
+            "starts are counted separately from orders: {text}"
+        );
 
         let (level, text) = labels.vacant_colony_result(&report(
             Outcome::Aborted {
                 detail: "the F4 view changed; refusing stale screen coordinates".to_owned(),
             },
+            0,
             0,
             4,
             7,
@@ -1523,7 +1546,7 @@ mod tests {
         );
 
         let (english_level, english_text) =
-            Labels::english().vacant_colony_result(&report(Outcome::Cancelled, 1, 4, 30));
+            Labels::english().vacant_colony_result(&report(Outcome::Cancelled, 1, 0, 4, 30));
         assert_eq!(
             english_level,
             NoticeLevel::Info,
@@ -1531,6 +1554,10 @@ mod tests {
         );
         assert!(
             english_text.contains("not completed buildings"),
+            "{english_text}"
+        );
+        assert!(
+            english_text.contains("confirmed construction starts"),
             "{english_text}"
         );
     }

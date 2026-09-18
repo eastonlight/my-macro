@@ -737,6 +737,7 @@ impl MacroApp {
                             RichText::new(labels.vacant_colony_progress(
                                 self.vacant_progress.probes(),
                                 self.vacant_progress.orders(),
+                                self.vacant_progress.starts(),
                             ))
                             .size(11.0)
                             .color(MUTED),
@@ -744,8 +745,10 @@ impl MacroApp {
                     }
                 });
                 // What one run sends, so the card cannot be mistaken for the
-                // row build: recall the saved view, probe, then order.
-                ui.horizontal(|ui| {
+                // row build: recall the saved view, probe, order, then confirm
+                // that the ordered drone actually started morphing before the
+                // next one is touched.
+                ui.horizontal_wrapped(|ui| {
                     ui.label(
                         RichText::new(labels.vacant_colony_sequence_label)
                             .size(11.0)
@@ -762,6 +765,12 @@ impl MacroApp {
                     render_keycap(ui, Key::B.name(), false);
                     render_keycap(ui, Key::C.name(), false);
                     render_keycap(ui, labels.mouse_click_label, true);
+                    ui.label(RichText::new(ARROW).color(MUTED));
+                    ui.label(
+                        RichText::new(labels.vacant_colony_confirm_step_label)
+                            .size(11.0)
+                            .color(Color32::from_rgb(0xfb, 0xbf, 0x24)),
+                    );
                 });
                 ui.label(RichText::new(labels.vacant_colony_hint()).size(11.0));
                 // Amber: this path never forces a click, and it is not
