@@ -589,6 +589,91 @@ pub fn detect_placement(frame: &Frame, target: Point, footprint_px: i32) -> Plac
 }
 
 /// Finds a preview-sized square of `wanted` coloured pixels inside `window`.
+/// Local component-based preview read for the strict saved-view builder.
+/// Unlike the legacy whole-window bounding box, unrelated coloured sprites
+/// do not enlarge the preview. Colour, square size, fill and ring gates remain.
+/// Freshness and partial-red refusal are additional caller-side requirements.
+pub(crate) fn detect_local_placement(frame: &Frame, target: Point, footprint: i32) -> Placement {
+    let green = local_overlay(frame, target, footprint, Rgb::is_preview_green);
+    let red = local_overlay(frame, target, footprint, Rgb::is_preview_red);
+    match (green, red) {
+        (Some(center), None) => Placement::Valid { center },
+        (None, Some(center)) => Placement::Invalid { center },
+        (Some(_), Some(_)) => Placement::Ambiguous,
+        (None, None) => Placement::Absent,
+    }
+}
+
+fn local_overlay(
+    frame: &Frame,
+    target: Point,
+    footprint: i32,
+    wanted: fn(Rgb) -> bool,
+) -> Option<Point> {
+    let radius = PREVIEW_SEARCH_MIN.max(footprint);
+    let side = (radius * 2) as usize;
+    let origin = target.offset(-radius, -radius);
+    let mut pixels = vec![false; side * side];
+    for (index, value) in pixels.iter_mut().enumerate() {
+        let p = origin.offset((index % side) as i32, (index / side) as i32);
+        *value = frame.pixel_at_screen(p).is_some_and(wanted);
+    }
+    let mut found = None;
+    let mut stack = Vec::new();
+    for seed in 0..pixels.len() {
+        if !pixels[seed] {
+            continue;
+        }
+        pixels[seed] = false;
+        stack.push(seed);
+        let (mut left, mut top, mut right, mut bottom) = (side, side, 0, 0);
+        let mut count = 0;
+        while let Some(index) = stack.pop() {
+            let (x, y) = (index % side, index / side);
+            left = left.min(x);
+            top = top.min(y);
+            right = right.max(x);
+            bottom = bottom.max(y);
+            count += 1;
+            for ny in y.saturating_sub(1)..=(y + 1).min(side - 1) {
+                for nx in x.saturating_sub(1)..=(x + 1).min(side - 1) {
+                    let next = ny * side + nx;
+                    if pixels[next] {
+                        pixels[next] = false;
+                        stack.push(next);
+                    }
+                }
+            }
+        }
+        let (width, height) = ((right - left + 1) as i32, (bottom - top + 1) as i32);
+        let min_side = footprint * PREVIEW_SIDE_MIN_NUM / PREVIEW_SIDE_DEN;
+        let max_side = footprint * PREVIEW_SIDE_MAX_NUM / PREVIEW_SIDE_DEN;
+        if !(min_side..=max_side).contains(&width)
+            || !(min_side..=max_side).contains(&height)
+            || count as f32 / ((width * height) as f32) < PREVIEW_MIN_FILL
+        {
+            continue;
+        }
+        let bounds = Rect::new(origin.x + left as i32, origin.y + top as i32, width, height);
+        let Some(center) = overlay_square(frame, bounds, wanted, footprint) else {
+            continue;
+        };
+        if (center.x - target.x).abs() > footprint / 2
+            || (center.y - target.y).abs() > footprint / 2
+        {
+            continue;
+        }
+        // Two distinct nearby squares are ambiguous: never pick arbitrarily.
+        if let Some(previous) = found
+            && previous != center
+        {
+            return None;
+        }
+        found = Some(center);
+    }
+    found
+}
+
 fn overlay_square(
     frame: &Frame,
     window: Rect,

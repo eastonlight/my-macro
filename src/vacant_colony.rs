@@ -366,7 +366,7 @@ fn same_view(before: &Frame, after: &Frame, skipped: &[Point]) -> bool {
 /// Reject static green terrain, partially red previews, off-target or unsafe
 /// snapped centres. Colour deltas must appear in every quadrant of the square.
 fn fresh_green(before: &Frame, after: &Frame, point: Point, reserved: &[Point]) -> Option<Point> {
-    let Placement::Valid { center } = vision::detect_placement(after, point, PITCH) else {
+    let Placement::Valid { center } = vision::detect_local_placement(after, point, PITCH) else {
         return None;
     };
     if (center.x - point.x).abs() > SNAP
@@ -447,7 +447,7 @@ fn run_with_search(
         // Best effort only when a placement overlay is positively visible.
         if let Ok(frame) = capture_probe(adapter, cancel, point)
             && matches!(
-                vision::detect_placement(&frame, point, PITCH),
+                vision::detect_local_placement(&frame, point, PITCH),
                 Placement::Valid { .. } | Placement::Invalid { .. }
             )
         {
@@ -861,7 +861,7 @@ fn confirm_closed(
     loop {
         wait(preview_settle(timing), cancel)?;
         let frame = capture_probe(adapter, cancel, point)?;
-        if vision::detect_placement(&frame, point, PITCH) == Placement::Absent {
+        if vision::detect_local_placement(&frame, point, PITCH) == Placement::Absent {
             absent += 1;
         } else {
             absent = 0;

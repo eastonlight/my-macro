@@ -1139,6 +1139,79 @@ fn the_probe_limits_are_gated_before_every_probe() {
     search.budget_gate(&report, 0).expect("under both caps");
 }
 
+/// Existing, previously captured game images only. No live desktop access.
+fn real_preview_fixture(name: &str) -> Frame {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/vacant-preview-1080")
+        .join(name);
+    let image = Frame::from_png(&path).expect("real preview fixture");
+    let mut rgba = Vec::new();
+    for y in 0..image.height() as i32 {
+        for x in 0..image.width() as i32 {
+            let p = image.pixel(x, y).expect("fixture pixel");
+            rgba.extend([p.r, p.g, p.b, 255]);
+        }
+    }
+    Frame::new(image.width(), image.height(), Point::new(96, 300), rgba)
+        .expect("translated fixture")
+}
+
+#[test]
+fn actual_green_preview_is_not_lost_to_a_nearby_coloured_building() {
+    let before = real_preview_fixture("before.png");
+    let after = real_preview_fixture("green-near-building.png");
+    let cursor = Point::new(336, 540);
+    // Reproduces the old refusal on an actual visible green 144x144 preview.
+    assert_eq!(
+        vision::detect_placement(&after, cursor, PITCH),
+        Placement::Absent
+    );
+    assert_eq!(
+        vision::detect_local_placement(&after, cursor, PITCH),
+        Placement::Valid {
+            center: Point::new(323, 537)
+        }
+    );
+    assert_eq!(
+        fresh_green(&before, &after, cursor, &[]),
+        Some(Point::new(323, 537))
+    );
+    assert!(same_view(&before, &after, &[cursor, PARK]));
+}
+
+#[test]
+fn actual_static_scene_and_reused_preview_are_not_fresh_green() {
+    let before = real_preview_fixture("before.png");
+    let after = real_preview_fixture("green-near-building.png");
+    let cursor = Point::new(336, 540);
+    assert_eq!(fresh_green(&before, &before, cursor, &[]), None);
+    assert_eq!(fresh_green(&after, &after, cursor, &[]), None);
+    assert_eq!(
+        fresh_green(&before, &after, cursor, &[Point::new(323, 537)]),
+        None
+    );
+    assert_eq!(
+        vision::detect_local_placement(&before, cursor, PITCH),
+        Placement::Absent
+    );
+}
+
+#[test]
+fn actual_preview_with_a_new_red_patch_is_still_refused() {
+    let before = real_preview_fixture("before.png");
+    let mut after = real_preview_fixture("green-near-building.png");
+    // Nine newly red sampled pixels inside an otherwise valid real preview.
+    for y in 485..500 {
+        for x in 280..295 {
+            after.set_pixel(x - 96, y - 300, PREVIEW_RED);
+        }
+    }
+    assert_eq!(
+        fresh_green(&before, &after, Point::new(336, 540), &[]),
+        None
+    );
+}
+
 #[test]
 fn the_live_counters_track_the_search() {
     let mut fake = Desktop::new(2);
