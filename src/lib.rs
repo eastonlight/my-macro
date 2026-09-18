@@ -15,6 +15,8 @@
 //! Everything except `windows` is host independent, which is what allows the
 //! pure tests in this crate to run on Linux.
 
+pub mod building_action;
+pub mod building_vision;
 #[path = "colony_limited.rs"]
 pub mod colony;
 pub mod config;
@@ -28,6 +30,8 @@ pub mod play_area;
 pub mod runner;
 pub mod spire_action;
 pub mod spire_vision;
+pub mod stargate_action;
+pub mod stargate_vision;
 pub mod ui_text;
 pub mod vacant_colony;
 pub mod vision;

@@ -21,6 +21,7 @@ use crate::input::InputError;
 use crate::macros::{BuildTarget, MacroId};
 use crate::runner::StartError;
 use crate::spire_action::{SpireActionOutcome, SpireActionReport, SpireScanError, SpireScanReport};
+use crate::stargate_action::StargateActionReport;
 
 /// UI language actually in use.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -157,6 +158,10 @@ pub struct Labels {
     pub spire_a_not_upgrade: &'static str,
     pub spire_skipped_note: &'static str,
     pub spire_zero_note: &'static str,
+    pub stargate_action_title: &'static str,
+    pub stargate_action_hint: &'static str,
+    pub stargate_confirm_scope_note: &'static str,
+    pub stargate_skipped_note: &'static str,
     /// Label of the retained read-only scan diagnostic (see
     /// [`Labels::spire_scan_preview`]); the action card itself only ever shows
     /// [`Labels::status_running`], because the action key always runs the full
@@ -182,6 +187,7 @@ pub struct Labels {
     pub hotkey_listener_failed: &'static str,
     pub hotkey_slot_trigger: &'static str,
     pub hotkey_slot_spire_action: &'static str,
+    pub hotkey_slot_stargate_action: &'static str,
     pub hotkey_slot_emergency: &'static str,
 
     pub diag_heading: &'static str,
@@ -278,6 +284,10 @@ impl Labels {
             spire_a_not_upgrade: "표시된 수는 완성된 업그레이드가 아니라 보낸 A 명령 수입니다.",
             spire_skipped_note: "선택 패널이 스파이어로 확인되지 않은 위치는 A를 보내지 않고 건너뛰었습니다.",
             spire_zero_note: "0곳은 없다는 증명이 아닙니다 — 게임 창이 전면에서 렌더링 중인지 확인하세요.",
+            stargate_action_title: "스타게이트 감지 동작",
+            stargate_action_hint: "무장하고 게임 창이 전면일 때만 동작하며, 동작 단축키를 누르면 바로 실행됩니다(미리보기 전용 모드는 없습니다). 전체 화면 SEARCH 1회에 이어 감지된 위치마다 검증용 캡처를 찍어 선택 패널을 확인하고, 스타게이트로 확인된 곳에만 A를 한 번 보냅니다. 좌표는 저장하지 않으며 1920x1080 리마스터 클라이언트만 지원합니다. 감지기는 캡처 1장으로 보정되어 아직 실기 검증 전입니다. 타이밍과 대상 프로세스는 위 카드와 공유합니다.",
+            stargate_confirm_scope_note: "감지와 선택 패널 확인은 그 자리의 건물 종류만 알려줍니다 — 이 스타게이트가 내 것인지, 지금 업그레이드가 가능한지는 확인하지 않습니다.",
+            stargate_skipped_note: "선택 패널이 스타게이트로 확인되지 않은 위치는 A를 보내지 않고 건너뛰었습니다.",
             status_scanning: "스캔 중",
             arm_hint_invalid: "설정이 올바르지 않아 무장할 수 없습니다 — 단축키가 서로 겹치지 않는지 확인하세요.",
             advanced_heading: "고급 설정 및 파일 관리",
@@ -299,6 +309,7 @@ impl Labels {
             hotkey_listener_failed: "단축키 감시를 시작하지 못했습니다",
             hotkey_slot_trigger: "줄짓기 실행",
             hotkey_slot_spire_action: "스파이어 동작",
+            hotkey_slot_stargate_action: "스타게이트 동작",
             hotkey_slot_emergency: "응급 정지",
 
             diag_heading: "안전 점검",
@@ -395,6 +406,10 @@ impl Labels {
             spire_a_not_upgrade: "The count is A commands sent, not completed upgrades.",
             spire_skipped_note: "Positions whose selection panel was not confirmed as the Spire were skipped without A.",
             spire_zero_note: "0 found is not proof that there is none - check that the game window is in front and rendering.",
+            stargate_action_title: "Stargate detect action",
+            stargate_action_hint: "Runs only while armed and while the game window is in front, and the action hotkey starts it immediately - there is no preview-only mode. One full-screen SEARCH is followed by a verification capture per detected position to read the selection panel, and A is sent once only where the panel is confirmed as a Stargate. No coordinate is stored, and only the 1920x1080 Remastered client is supported. The detector is calibrated on one screenshot and is not live-verified yet. Timing and the target process are shared with the row-build card above.",
+            stargate_confirm_scope_note: "A detection and a confirmed selection panel only tell you the building type at that spot - they do not check that the Stargate is yours or that an upgrade is available right now.",
+            stargate_skipped_note: "Positions whose selection panel was not confirmed as the Stargate were skipped without A.",
             status_scanning: "Scanning",
             arm_hint_invalid: "Cannot arm: the settings are invalid - the hotkeys must not collide.",
             advanced_heading: "Advanced Settings & Diagnostics",
@@ -416,6 +431,7 @@ impl Labels {
             hotkey_listener_failed: "Could not start the hotkey listener",
             hotkey_slot_trigger: "row build",
             hotkey_slot_spire_action: "spire action",
+            hotkey_slot_stargate_action: "stargate action",
             hotkey_slot_emergency: "emergency stop",
 
             diag_heading: "Safety check",
@@ -471,6 +487,7 @@ impl Labels {
         match slot {
             HotkeySlot::Trigger => self.hotkey_slot_trigger,
             HotkeySlot::SpireAction => self.hotkey_slot_spire_action,
+            HotkeySlot::StargateAction => self.hotkey_slot_stargate_action,
             HotkeySlot::Emergency => self.hotkey_slot_emergency,
             HotkeySlot::VacantColony => self.vacant_colony_title(),
         }
@@ -703,18 +720,39 @@ impl Labels {
 
     /// Preview of one full action pass: what was clicked, where `A` was sent,
     /// what was skipped, and the capture/detection timings.
+    /// Preview of one full action pass: what was clicked, where `A` was sent,
+    /// what was skipped, and the capture/detection timings.
     pub fn spire_action_preview(&self, report: &SpireActionReport) -> SpirePreview {
+        self.action_preview(report, self.spire_action_title, self.spire_skipped_note)
+    }
+
+    /// Preview of one finished Stargate action. Same report shape as the Spire
+    /// action, but titled and worded unambiguously as the Stargate feature.
+    pub fn stargate_action_preview(&self, report: &StargateActionReport) -> SpirePreview {
+        self.action_preview(
+            report,
+            self.stargate_action_title,
+            self.stargate_skipped_note,
+        )
+    }
+
+    fn action_preview(
+        &self,
+        report: &SpireActionReport,
+        title: &str,
+        skipped_note: &str,
+    ) -> SpirePreview {
         let centers: Vec<Point> = report.targets.iter().map(|target| target.center).collect();
         let outcome_word = self.spire_outcome_word(&report.outcome);
         let parts = match self.lang {
             Lang::Korean => [
-                format!("{} {outcome_word}", self.spire_action_title),
+                format!("{title} {outcome_word}"),
                 format!("{} {}회", self.spire_a_sent_label, report.acted),
                 format!("{} {}", report.detections, self.spire_detected_label),
                 format!("{} {}건", self.spire_skipped_label, report.skipped),
             ],
             Lang::English => [
-                format!("{} {outcome_word}", self.spire_action_title),
+                format!("{title} {outcome_word}"),
                 format!("{} {}", self.spire_a_sent_label, report.acted),
                 format!("{} {}", report.detections, self.spire_detected_label),
                 format!("{} {}", report.skipped, self.spire_skipped_label),
@@ -736,7 +774,7 @@ impl Labels {
 
         let mut notes = Vec::new();
         if report.skipped > 0 {
-            notes.push(self.spire_skipped_note.to_owned());
+            notes.push(skipped_note.to_owned());
         }
         notes.push(self.spire_confirm_scope_note.to_owned());
         notes.push(self.spire_a_not_upgrade.to_owned());
@@ -1223,6 +1261,7 @@ mod tests {
             })
             .collect();
         SpireActionReport {
+            label: "Spire",
             outcome,
             detections: acted + skipped,
             targets,

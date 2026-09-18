@@ -37,6 +37,10 @@ pub const DEFAULT_SPIRE_ACTION_HOTKEY: HotkeyKey = HotkeyKey::Tab;
 /// stays on an F-key the game does not use.
 pub const DEFAULT_VACANT_COLONY_HOTKEY: HotkeyKey = HotkeyKey::F6;
 
+/// Default key for the Stargate action (scan, click each gate, verified `A`).
+/// F7 is free in the game and is not the row trigger or the Spire action.
+pub const DEFAULT_STARGATE_ACTION_HOTKEY: HotkeyKey = HotkeyKey::F7;
+
 fn default_vacant_colony_hotkey(trigger: HotkeyKey, action: HotkeyKey) -> HotkeyKey {
     Bindings::new(trigger, action).vacant_colony
 }
@@ -54,6 +58,21 @@ fn default_spire_action_hotkey(trigger: HotkeyKey) -> HotkeyKey {
     } else {
         DEFAULT_SPIRE_ACTION_HOTKEY
     }
+}
+
+/// The non-conflicting default for a file that does not name the Stargate
+/// action key yet. F7 is the normal default; an occupied F7 falls through the
+/// free-key chain ([`crate::hotkey::STARGATE_FALLBACK_KEYS`]) instead of
+/// making a previously valid file invalid.
+fn default_stargate_action_hotkey(
+    trigger: HotkeyKey,
+    action: HotkeyKey,
+    vacant: HotkeyKey,
+) -> HotkeyKey {
+    crate::hotkey::STARGATE_FALLBACK_KEYS
+        .into_iter()
+        .find(|key| *key != trigger && *key != action && *key != vacant && *key != EMERGENCY_HOTKEY)
+        .expect("four bindings cannot occupy every fallback key")
 }
 
 /// Persisted settings.
@@ -75,6 +94,10 @@ pub struct Config {
     /// `spire_scan_only` key load as usual — the legacy key is parsed and
     /// ignored, never turned into a setting.
     pub spire_action_hotkey: HotkeyKey,
+    /// The key that starts the Stargate action (one full-screen search, click
+    /// each gate's upper hull, verified `A`). Independent of the other three
+    /// and never F8 or F4. Default [`DEFAULT_STARGATE_ACTION_HOTKEY`] (F7).
+    pub stargate_action_hotkey: HotkeyKey,
     /// F4 saved-view Colony search (default [`DEFAULT_VACANT_COLONY_HOTKEY`]).
     /// F4 itself stays available to the game: it is never a binding here, and
     /// the macro only *presses* F4 to recall the player's saved view.
@@ -100,6 +123,7 @@ impl Default for Config {
         Self {
             trigger_hotkey: DEFAULT_TRIGGER_HOTKEY,
             spire_action_hotkey: default_spire_action_hotkey(DEFAULT_TRIGGER_HOTKEY),
+            stargate_action_hotkey: DEFAULT_STARGATE_ACTION_HOTKEY,
             vacant_colony_hotkey: DEFAULT_VACANT_COLONY_HOTKEY,
             build_target: BuildTarget::default(),
             colony_row_mode: RowMode::default(),
@@ -172,6 +196,12 @@ impl Config {
                 EMERGENCY_HOTKEY
             )));
         }
+        if self.stargate_action_hotkey == EMERGENCY_HOTKEY {
+            return Err(ConfigError::Invalid(format!(
+                "stargate_action_hotkey is {}, which is reserved for the emergency stop",
+                EMERGENCY_HOTKEY
+            )));
+        }
         if self.spire_action_hotkey == self.trigger_hotkey {
             return Err(ConfigError::Invalid(format!(
                 "trigger_hotkey and spire_action_hotkey are both {}; they must differ",
@@ -181,6 +211,7 @@ impl Config {
         for (field, key) in [
             ("trigger_hotkey", self.trigger_hotkey),
             ("spire_action_hotkey", self.spire_action_hotkey),
+            ("stargate_action_hotkey", self.stargate_action_hotkey),
             ("vacant_colony_hotkey", self.vacant_colony_hotkey),
         ] {
             if key == HotkeyKey::F4 {
@@ -198,6 +229,18 @@ impl Config {
         {
             return Err(ConfigError::Invalid(
                 "vacant_colony_hotkey must differ from the other hotkeys and F8".to_owned(),
+            ));
+        }
+        if [
+            EMERGENCY_HOTKEY,
+            self.trigger_hotkey,
+            self.spire_action_hotkey,
+            self.vacant_colony_hotkey,
+        ]
+        .contains(&self.stargate_action_hotkey)
+        {
+            return Err(ConfigError::Invalid(
+                "stargate_action_hotkey must differ from the other hotkeys and F8".to_owned(),
             ));
         }
         validate_target_process(&self.target_process)?;
@@ -218,6 +261,7 @@ impl Config {
     pub fn bindings(&self) -> Bindings {
         Bindings::new(self.trigger_hotkey, self.spire_action_hotkey)
             .with_vacant_colony(self.vacant_colony_hotkey)
+            .with_stargate_action(self.stargate_action_hotkey)
     }
 
     /// Parses one settings file, migrating the legacy shared timing if present.
@@ -306,6 +350,10 @@ struct SettingsFile {
     /// existed; [`SettingsFile::into_config`] then picks a free default.
     #[serde(default)]
     spire_action_hotkey: Option<HotkeyKey>,
+    /// The Stargate action key. Missing in files written before this action
+    /// existed; [`SettingsFile::into_config`] then picks a free default.
+    #[serde(default)]
+    stargate_action_hotkey: Option<HotkeyKey>,
     #[serde(default)]
     vacant_colony_hotkey: Option<HotkeyKey>,
     /// Removed key, accepted only so an older file still loads.
@@ -429,23 +477,17 @@ impl SettingsFile {
         let action = self
             .spire_action_hotkey
             .unwrap_or_else(|| default_spire_action_hotkey(trigger));
+        let vacant = self
+            .vacant_colony_hotkey
+            .unwrap_or_else(|| default_vacant_colony_hotkey(trigger, action));
+        let stargate = self
+            .stargate_action_hotkey
+            .unwrap_or_else(|| default_stargate_action_hotkey(trigger, action, vacant));
         Ok(Config {
-            vacant_colony_hotkey: self
-                .vacant_colony_hotkey
-                .unwrap_or_else(|| default_vacant_colony_hotkey(trigger, action)),
-            trigger_hotkey: self
-                .trigger_hotkey
-                .or(self.colony_hotkey)
-                .or(self.spire_hotkey)
-                .unwrap_or(DEFAULT_TRIGGER_HOTKEY),
-            spire_action_hotkey: self.spire_action_hotkey.unwrap_or_else(|| {
-                default_spire_action_hotkey(
-                    self.trigger_hotkey
-                        .or(self.colony_hotkey)
-                        .or(self.spire_hotkey)
-                        .unwrap_or(DEFAULT_TRIGGER_HOTKEY),
-                )
-            }),
+            trigger_hotkey: trigger,
+            spire_action_hotkey: action,
+            stargate_action_hotkey: stargate,
+            vacant_colony_hotkey: vacant,
             build_target: self.build_target.unwrap_or_default(),
             colony_row_mode: self.colony_row_mode.unwrap_or_default(),
             force_build: self.force_build.unwrap_or(true),
@@ -534,9 +576,10 @@ target_process = "StarCraft.exe"
     /// `spire_scan_only` is deliberately absent: the key is read from older
     /// files but never written again, so a removed feature cannot come back
     /// through a saved file.
-    const WRITTEN_KEYS: [&str; 9] = [
+    const WRITTEN_KEYS: [&str; 10] = [
         "trigger_hotkey",
         "spire_action_hotkey",
+        "stargate_action_hotkey",
         "vacant_colony_hotkey",
         "build_target",
         "colony_row_mode",
@@ -558,6 +601,7 @@ target_process = "StarCraft.exe"
         let config = Config::default();
         assert_eq!(config.trigger_hotkey, HotkeyKey::Tilde);
         assert_eq!(config.spire_action_hotkey, HotkeyKey::Tab);
+        assert_eq!(config.stargate_action_hotkey, HotkeyKey::F7);
         assert_eq!(config.vacant_colony_hotkey, HotkeyKey::F6);
         assert_eq!(config.build_target, BuildTarget::Colony);
         assert_eq!(config.colony_row_mode, RowMode::LeftToRight);
@@ -607,6 +651,7 @@ target_process = "StarCraft.exe"
         let config = Config {
             trigger_hotkey: HotkeyKey::F11,
             spire_action_hotkey: HotkeyKey::F12,
+            stargate_action_hotkey: HotkeyKey::F10,
             vacant_colony_hotkey: HotkeyKey::F9,
             build_target: BuildTarget::Spire,
             colony_row_mode: RowMode::EndsInward,
@@ -965,6 +1010,10 @@ target_process = "StarCraft.exe"
             config.bindings().get(HotkeySlot::VacantColony),
             HotkeyKey::F6
         );
+        assert_eq!(
+            config.bindings().get(HotkeySlot::StargateAction),
+            HotkeyKey::F7
+        );
         assert_eq!(config.bindings().emergency, HotkeyKey::F8);
         assert!(config.force_build, "the forced mode is the default");
     }
@@ -1018,6 +1067,48 @@ target_process = "StarCraft.exe"
         assert_eq!(reloaded, legacy);
         assert_eq!((reloaded.press_ms, reloaded.gap_ms), (50, 50));
         assert_eq!(reloaded.spire_action_hotkey, HotkeyKey::Tab);
+    }
+
+    #[test]
+    fn a_file_without_the_stargate_action_key_gets_a_free_default() {
+        // The current default is F7. `SAMPLE` binds the row trigger to F6 and
+        // the third key falls back to F7, so the Stargate action continues down
+        // the free-key chain instead of making the file invalid.
+        assert!(!SAMPLE.contains("stargate_action_hotkey"), "{SAMPLE}");
+        let config = Config::parse(SAMPLE).expect("an older file must still load");
+        assert_eq!(config.stargate_action_hotkey, HotkeyKey::F9);
+        assert_eq!(config.validate(), Ok(()));
+
+        assert_eq!(Config::default().stargate_action_hotkey, HotkeyKey::F7);
+
+        // An explicit key always wins.
+        let text = format!("{SAMPLE}stargate_action_hotkey = \"F11\"\n");
+        assert_eq!(
+            Config::parse(&text)
+                .expect("explicit key")
+                .stargate_action_hotkey,
+            HotkeyKey::F11
+        );
+    }
+
+    #[test]
+    fn the_stargate_key_must_be_distinct_from_every_other_binding() {
+        for key in [
+            HotkeyKey::Tilde,
+            HotkeyKey::Tab,
+            HotkeyKey::F6,
+            HotkeyKey::EMERGENCY,
+        ] {
+            let config = Config {
+                stargate_action_hotkey: key,
+                ..Config::default()
+            };
+            let error = config.validate().expect_err("duplicate must be rejected");
+            assert!(
+                error.to_string().contains("stargate_action_hotkey"),
+                "{error}"
+            );
+        }
     }
 
     #[test]
@@ -1083,6 +1174,10 @@ target_process = "StarCraft.exe"
             },
             Config {
                 vacant_colony_hotkey: HotkeyKey::F4,
+                ..Config::default()
+            },
+            Config {
+                stargate_action_hotkey: HotkeyKey::F4,
                 ..Config::default()
             },
         ] {

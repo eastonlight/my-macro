@@ -1,265 +1,51 @@
 //! The Spire action: one capture, click each detected crown, verify, press `A`.
 //!
-//! This is deliberately **not** the build-Spire row macro. It issues no build
-//! order and reports no building: for each Spire crown found by
-//! [`crate::spire_vision`] it clicks the crown once, checks the *selection
-//! panel* against the real Spire portrait, and only then presses `A` once.
-//!
-//! Safety rules this module implements:
-//!
-//! * exactly **one** full-screen capture and **one** full-screen search per
-//!   run; the per-target check reads only the small
-//!   [`crate::spire_vision::PORTRAIT_ROI`] (`roi_captures`),
-//! * the adapter's safety gate runs before *every* cursor move, mouse down/up
-//!   and `A` down/up (foreground process, window identity and 1920×1080
-//!   geometry, held modifiers),
-//! * when the selection panel cannot be confidently read as a Spire the click
-//!   is reported as `Skipped` and `A` is **not** sent — verification cannot be
-//!   turned off,
-//! * a focus/window change aborts instead of reusing the stale snapshot
-//!   coordinates, and every key/button this run pressed is released again.
+//! This is the Spire wrapper around the shared
+//! [`crate::building_action`] executor, which documents the flow and the safety
+//! rules (one full capture and one full search per run, a safety gate before
+//! every event, bounded selection-panel reads, no `A` without a verified
+//! selection, cancellation, cleanup). The Stargate action uses the same
+//! executor with its own profile.
 //!
 //! Everything talks to [`DesktopAdapter`], so the whole flow is exercised on
 //! any host with a fake capture/input adapter.
 
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant};
+use std::sync::atomic::AtomicBool;
 
-use crate::frame::Point;
-use crate::input::{DesktopAdapter, InputError};
-use crate::macros::{Key, Timing};
-use crate::spire_vision::{self, PORTRAIT_ROI};
+use crate::building_action::{self, BuildingActionReport};
+use crate::input::DesktopAdapter;
+use crate::macros::Timing;
 
-/// Bounded selection-panel reads before a click counts as unverified.
-pub const VERIFY_ATTEMPTS: usize = 3;
-/// Cancellation poll interval while waiting.
-const CANCEL_POLL_INTERVAL: Duration = Duration::from_millis(5);
-/// Small settle after the last event of one target.
-///
-/// Nothing reads the game after the `A` key-up, so the next target's cursor
-/// move only has to stay queued *behind* that tap. The input queue already
-/// guarantees the order, so this is a hygiene gap rather than a frame wait —
-/// the configured `gap` would only add dead time between targets.
-const ORDERING_GAP: Duration = Duration::from_millis(5);
-/// Ceiling on the settle between moving the cursor and clicking.
-///
-/// `SetCursorPos` applies synchronously, so the click that follows is already
-/// delivered at the new position; the configured `gap` is capped here because a
-/// long wait per target would only add dead time.
-const MOVE_SETTLE: Duration = Duration::from_millis(12);
-/// Ceiling on the settle between two selection-panel reads.
-///
-/// The panel needs a rendered frame to reflect the click, so a retry must never
-/// be *shorter* than the configured `gap`; this is an upper bound so a user who
-/// configures a very large `gap` does not pay it on every retry of a target
-/// whose panel simply is not a Spire.
-const VERIFY_RETRY_GAP: Duration = Duration::from_millis(24);
+pub use crate::building_action::{
+    BuildingActionOutcome, BuildingScanError, BuildingScanReport, BuildingTargetDisposition,
+    BuildingTargetReport, VERIFY_ATTEMPTS,
+};
 
 /// How one Spire action run ended.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum SpireActionOutcome {
-    /// The scan finished and every target was either acted on or reported as
-    /// skipped.
-    Completed,
-    /// Cancelled (F8/disarm) before the next event.
-    Cancelled,
-    /// The safety gate or a bad capture stopped the run. Nothing further was
-    /// sent, and a stale snapshot is never reused.
-    Aborted { detail: String },
-    /// The OS refused an injected event.
-    Failed { detail: String },
-}
-
-impl SpireActionOutcome {
-    pub fn is_success(&self) -> bool {
-        matches!(self, Self::Completed)
-    }
-}
-
+pub type SpireActionOutcome = BuildingActionOutcome;
 /// What happened to one detected crown.
-#[derive(Clone, Debug, PartialEq)]
-pub enum TargetDisposition {
-    /// The click was verified against the Spire portrait and `A` was sent once.
-    Acted,
-    /// The click landed but the selection could not be confirmed as a Spire, so
-    /// `A` was withheld.
-    Skipped { reason: String },
-}
-
+pub type TargetDisposition = BuildingTargetDisposition;
 /// Per-target detail.
-#[derive(Clone, Debug, PartialEq)]
-pub struct SpireTargetReport {
-    /// Crown centre the click was aimed at.
-    pub center: Point,
-    /// Detector score of the crown.
-    pub score: f32,
-    pub disposition: TargetDisposition,
-}
-
+pub type SpireTargetReport = BuildingTargetReport;
 /// Everything one Spire action run did, ready to log or display.
-#[derive(Clone, Debug, PartialEq)]
-pub struct SpireActionReport {
-    pub outcome: SpireActionOutcome,
-    /// Spires the single full-screen scan found.
-    pub detections: usize,
-    /// Per-target outcomes, in click order.
-    pub targets: Vec<SpireTargetReport>,
-    /// Targets for which `A` was sent.
-    pub acted: usize,
-    /// Targets whose selection could not be verified.
-    pub skipped: usize,
-    /// Full-screen captures performed (always `0` or `1`).
-    pub full_captures: usize,
-    /// Small selection-panel ROI captures performed (bounded per target).
-    pub roi_captures: usize,
-    /// Time spent on the one full-screen capture.
-    pub capture_ms: u128,
-    /// Time spent on the one full-screen detection.
-    pub detect_ms: u128,
+pub type SpireActionReport = BuildingActionReport;
+/// A read-only Spire scan result.
+pub type SpireScanReport = BuildingScanReport;
+/// Why a Spire scan-only pass produced no trustworthy result.
+pub type SpireScanError = BuildingScanError;
+
+/// A report for a Spire run that never started (internal failure).
+pub fn failed(detail: impl Into<String>) -> SpireActionReport {
+    BuildingActionReport::failed(detail, "Spire")
 }
-
-impl SpireActionReport {
-    pub fn new(outcome: SpireActionOutcome) -> Self {
-        Self {
-            outcome,
-            detections: 0,
-            targets: Vec::new(),
-            acted: 0,
-            skipped: 0,
-            full_captures: 0,
-            roi_captures: 0,
-            capture_ms: 0,
-            detect_ms: 0,
-        }
-    }
-
-    pub fn failed(detail: impl Into<String>) -> Self {
-        Self::new(SpireActionOutcome::Failed {
-            detail: detail.into(),
-        })
-    }
-
-    /// English one-line summary. The GUI adds its own localized framing; this
-    /// wording never claims a building was produced.
-    pub fn summary(&self) -> String {
-        let base = format!(
-            "Spire action: {} found, {} command(s) sent, {} skipped, {} full capture(s), {} ROI capture(s), capture {} ms, detect {} ms",
-            self.detections,
-            self.acted,
-            self.skipped,
-            self.full_captures,
-            self.roi_captures,
-            self.capture_ms,
-            self.detect_ms
-        );
-        match &self.outcome {
-            SpireActionOutcome::Completed => base,
-            SpireActionOutcome::Cancelled => format!("{base} (cancelled)"),
-            SpireActionOutcome::Aborted { detail } => format!("{base} (aborted: {detail})"),
-            SpireActionOutcome::Failed { detail } => format!("{base} (failed: {detail})"),
-        }
-    }
-}
-
-/// A read-only scan: what one capture and one search found, with timings.
-#[derive(Clone, Debug, PartialEq)]
-pub struct SpireScanReport {
-    pub detections: Vec<spire_vision::SpireDetection>,
-    pub count: usize,
-    /// Time spent on the one full-screen capture.
-    pub capture_ms: u128,
-    /// Time spent on the one full-screen detection.
-    pub detect_ms: u128,
-    /// Full-screen captures performed (always 1 on success).
-    pub full_captures: usize,
-}
-
-/// Why a scan-only pass produced no trustworthy result.
-///
-/// Finding nothing is **not** an error: `Ok` with `count == 0` means a
-/// supported, non-blank game frame was searched and no crown was found. These
-/// variants mean the *frame itself* could not be trusted, so reporting
-/// "0 spires" would be a false negative instead of a measurement.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum SpireScanError {
-    /// Cancelled (F8/disarm) before or during capture/detection.
-    Cancelled,
-    /// The adapter could not deliver a capture: the safety gate refused it
-    /// (wrong foreground window, held modifier) or the OS failed.
-    Adapter(InputError),
-    /// A capture arrived but is blank or of an unsupported size, so no
-    /// detection result may be derived from it.
-    Unusable { detail: String },
-    /// Unexpected internal failure (a panic inside the scan worker). Nothing
-    /// was injected.
-    Internal { detail: String },
-}
-
-impl std::fmt::Display for SpireScanError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Cancelled => f.write_str("the scan was cancelled"),
-            Self::Adapter(error) => write!(f, "{error}"),
-            Self::Unusable { detail } => f.write_str(detail),
-            Self::Internal { detail } => f.write_str(detail),
-        }
-    }
-}
-
-impl std::error::Error for SpireScanError {}
 
 /// Scan-only mode: one capture and one full-screen search, **zero** injected
-/// events. Use it to preview where the action would click.
-///
-/// Runs the same frame gates as [`run`] before it reports anything: a blank or
-/// unsupported capture is [`SpireScanError::Unusable`], never "0 spires". A
-/// cancelled pass (`cancel` already latched) returns before it captures
-/// anything.
+/// events. Use it to preview where the Spire action would click.
 pub fn scan_once(
     adapter: &mut dyn DesktopAdapter,
     cancel: &AtomicBool,
 ) -> Result<SpireScanReport, SpireScanError> {
-    if cancel.load(Ordering::SeqCst) {
-        return Err(SpireScanError::Cancelled);
-    }
-
-    let started = Instant::now();
-    let frame = adapter.capture_client().map_err(SpireScanError::Adapter)?;
-    let capture_ms = started.elapsed().as_millis();
-    if cancel.load(Ordering::SeqCst) {
-        return Err(SpireScanError::Cancelled);
-    }
-
-    if frame.is_blank() {
-        return Err(SpireScanError::Unusable {
-            detail: "the capture is blank; the game window is minimized or not rendering"
-                .to_owned(),
-        });
-    }
-    if !spire_vision::supported_profile(&frame) {
-        return Err(SpireScanError::Unusable {
-            detail: format!(
-                "unsupported client size {}x{}; only {}x{} is supported",
-                frame.width(),
-                frame.height(),
-                spire_vision::CLIENT_WIDTH,
-                spire_vision::CLIENT_HEIGHT
-            ),
-        });
-    }
-
-    let scan = spire_vision::detect_spires(&frame);
-    if cancel.load(Ordering::SeqCst) {
-        return Err(SpireScanError::Cancelled);
-    }
-    let count = scan.count();
-    Ok(SpireScanReport {
-        detections: scan.detections,
-        count,
-        capture_ms,
-        detect_ms: scan.detect_ms,
-        full_captures: 1,
-    })
+    building_action::scan_once(adapter, cancel, &crate::spire_vision::PROFILE)
 }
 
 /// Runs the Spire action once.
@@ -271,192 +57,20 @@ pub fn run(
     cancel: &AtomicBool,
     timing: Timing,
 ) -> SpireActionReport {
-    let mut report = SpireActionReport::new(SpireActionOutcome::Completed);
-    let outcome = match run_inner(adapter, cancel, timing, &mut report) {
-        Ok(()) => SpireActionOutcome::Completed,
-        Err(outcome) => outcome,
-    };
-    report.outcome = match (outcome, adapter.release_all()) {
-        (outcome @ (SpireActionOutcome::Failed { .. } | SpireActionOutcome::Aborted { .. }), _) => {
-            outcome
-        }
-        (_, Err(error)) => SpireActionOutcome::Failed {
-            detail: format!("could not release injected input: {error}"),
-        },
-        (outcome, Ok(())) => outcome,
-    };
-    report
-}
-
-fn run_inner(
-    adapter: &mut dyn DesktopAdapter,
-    cancel: &AtomicBool,
-    timing: Timing,
-    report: &mut SpireActionReport,
-) -> Result<(), SpireActionOutcome> {
-    if cancel.load(Ordering::SeqCst) {
-        return Err(SpireActionOutcome::Cancelled);
-    }
-
-    // Exactly one full-screen capture and one full-screen search per run.
-    let started = Instant::now();
-    let frame = adapter.capture_client().map_err(map_error)?;
-    report.capture_ms = started.elapsed().as_millis();
-    report.full_captures = 1;
-    if cancel.load(Ordering::SeqCst) {
-        return Err(SpireActionOutcome::Cancelled);
-    }
-
-    if frame.is_blank() {
-        return Err(SpireActionOutcome::Aborted {
-            detail: "the capture is blank; the game window is minimized or not rendering"
-                .to_owned(),
-        });
-    }
-    if !spire_vision::supported_profile(&frame) {
-        return Err(SpireActionOutcome::Aborted {
-            detail: format!(
-                "unsupported client size {}x{}; only {}x{} is supported",
-                frame.width(),
-                frame.height(),
-                spire_vision::CLIENT_WIDTH,
-                spire_vision::CLIENT_HEIGHT
-            ),
-        });
-    }
-
-    let scan = spire_vision::detect_spires(&frame);
-    report.detect_ms = scan.detect_ms;
-    report.detections = scan.count();
-    if cancel.load(Ordering::SeqCst) {
-        return Err(SpireActionOutcome::Cancelled);
-    }
-
-    for detection in &scan.detections {
-        if cancel.load(Ordering::SeqCst) {
-            return Err(SpireActionOutcome::Cancelled);
-        }
-        // The cursor move is itself an action in the game, so the safety gate
-        // runs before it exactly like before a key or click.
-        guard(adapter, cancel)?;
-        adapter.move_cursor(detection.center).map_err(map_error)?;
-        wait(timing.gap.min(MOVE_SETTLE), cancel)?;
-        click(adapter, cancel, timing)?;
-
-        let disposition = if verify_selection(adapter, cancel, timing, report)? {
-            tap(adapter, cancel, timing, Key::A)?;
-            report.acted += 1;
-            TargetDisposition::Acted
-        } else {
-            report.skipped += 1;
-            TargetDisposition::Skipped {
-                reason: "selection panel did not show the Spire portrait; A withheld".to_owned(),
-            }
-        };
-        report.targets.push(SpireTargetReport {
-            center: detection.center,
-            score: detection.score,
-            disposition,
-        });
-    }
-    Ok(())
-}
-
-/// Reads the selection panel a bounded number of times; true only when it
-/// positively shows the Spire portrait.
-fn verify_selection(
-    adapter: &mut dyn DesktopAdapter,
-    cancel: &AtomicBool,
-    timing: Timing,
-    report: &mut SpireActionReport,
-) -> Result<bool, SpireActionOutcome> {
-    for attempt in 0..VERIFY_ATTEMPTS {
-        guard(adapter, cancel)?;
-        let roi = adapter.capture_region(PORTRAIT_ROI).map_err(map_error)?;
-        report.roi_captures += 1;
-        if spire_vision::verify_spire_selection(&roi).accepted {
-            return Ok(true);
-        }
-        if attempt + 1 < VERIFY_ATTEMPTS {
-            wait(VERIFY_RETRY_GAP.min(timing.gap), cancel)?;
-        }
-    }
-    Ok(false)
-}
-
-fn map_error(error: InputError) -> SpireActionOutcome {
-    match error {
-        // A refused gate is an expected, handled stop: the snapshot coordinates
-        // must not be used after a focus/window change.
-        InputError::Unsafe(_) => SpireActionOutcome::Aborted {
-            detail: error.to_string(),
-        },
-        InputError::Injection(_) => SpireActionOutcome::Failed {
-            detail: error.to_string(),
-        },
-    }
-}
-
-/// Runs the adapter's safety gate before an injected event.
-fn guard(adapter: &mut dyn DesktopAdapter, cancel: &AtomicBool) -> Result<(), SpireActionOutcome> {
-    if cancel.load(Ordering::SeqCst) {
-        return Err(SpireActionOutcome::Cancelled);
-    }
-    adapter.safety_check().map_err(map_error)?;
-    // F8 may arrive while the OS gate is inspecting the foreground process.
-    if cancel.load(Ordering::SeqCst) {
-        return Err(SpireActionOutcome::Cancelled);
-    }
-    Ok(())
-}
-
-/// Injectable key hold / gap, polled for cancellation.
-fn wait(duration: Duration, cancel: &AtomicBool) -> Result<(), SpireActionOutcome> {
-    let deadline = Instant::now() + duration;
-    while Instant::now() < deadline {
-        if cancel.load(Ordering::SeqCst) {
-            return Err(SpireActionOutcome::Cancelled);
-        }
-        let left = deadline.saturating_duration_since(Instant::now());
-        std::thread::sleep(left.min(CANCEL_POLL_INTERVAL));
-    }
-    Ok(())
-}
-
-fn tap(
-    adapter: &mut dyn DesktopAdapter,
-    cancel: &AtomicBool,
-    timing: Timing,
-    key: Key,
-) -> Result<(), SpireActionOutcome> {
-    guard(adapter, cancel)?;
-    adapter.key_down(key).map_err(map_error)?;
-    wait(timing.press, cancel)?;
-    guard(adapter, cancel)?;
-    adapter.key_up(key).map_err(map_error)?;
-    wait(ORDERING_GAP, cancel)
-}
-
-fn click(
-    adapter: &mut dyn DesktopAdapter,
-    cancel: &AtomicBool,
-    timing: Timing,
-) -> Result<(), SpireActionOutcome> {
-    guard(adapter, cancel)?;
-    adapter.mouse_left_down().map_err(map_error)?;
-    wait(timing.press, cancel)?;
-    guard(adapter, cancel)?;
-    adapter.mouse_left_up().map_err(map_error)?;
-    wait(timing.gap, cancel)
+    building_action::run(adapter, cancel, timing, &crate::spire_vision::PROFILE)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::frame::{Frame, Rect};
-    use crate::input::InputAdapter;
+    use crate::building_action::guard;
+    use crate::frame::{Frame, Point, Rect};
+    use crate::input::{InputAdapter, InputError};
+    use crate::macros::Key;
+    use crate::spire_vision::PORTRAIT_ROI;
     use std::path::PathBuf;
     use std::sync::Arc;
+    use std::sync::atomic::Ordering;
 
     fn fixture(name: &str) -> Frame {
         let path = PathBuf::from("tests/fixtures/spire-screen-1080").join(name);

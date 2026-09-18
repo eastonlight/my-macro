@@ -119,6 +119,8 @@ pub enum HotkeySlot {
     Trigger,
     /// The Spire action: scan the screen, click each Spire, verified `A`.
     SpireAction,
+    /// The Stargate action: scan the screen, click each Stargate, verified `A`.
+    StargateAction,
     /// Recall F4 and place Colonies in verified free space.
     VacantColony,
     /// The emergency stop. Fixed to F8 and never configurable.
@@ -126,10 +128,11 @@ pub enum HotkeySlot {
 }
 
 impl HotkeySlot {
-    pub const ALL: [Self; 4] = [
+    pub const ALL: [Self; 5] = [
         Self::Trigger,
         Self::SpireAction,
         Self::VacantColony,
+        Self::StargateAction,
         Self::Emergency,
     ];
 
@@ -139,6 +142,7 @@ impl HotkeySlot {
             Self::SpireAction => 2,
             Self::Emergency => 3,
             Self::VacantColony => 4,
+            Self::StargateAction => 5,
         }
     }
 
@@ -148,6 +152,7 @@ impl HotkeySlot {
             2 => Some(Self::SpireAction),
             3 => Some(Self::Emergency),
             4 => Some(Self::VacantColony),
+            5 => Some(Self::StargateAction),
             _ => None,
         }
     }
@@ -156,6 +161,7 @@ impl HotkeySlot {
         match self {
             Self::Trigger => "trigger",
             Self::SpireAction => "spire action",
+            Self::StargateAction => "stargate action",
             Self::Emergency => "emergency",
             Self::VacantColony => "F4 vacant-space Colony",
         }
@@ -168,6 +174,7 @@ pub struct Bindings {
     pub trigger: HotkeyKey,
     pub spire_action: HotkeyKey,
     pub vacant_colony: HotkeyKey,
+    pub stargate_action: HotkeyKey,
     pub emergency: HotkeyKey,
 }
 
@@ -176,15 +183,21 @@ impl Bindings {
     /// stop.
     pub fn new(trigger: HotkeyKey, spire_action: HotkeyKey) -> Self {
         // F5 is not offered: StarCraft 1 binds F2-F5 itself, so the fallback
-        // chain stays on keys the game leaves alone.
+        // chain stays on keys the game leaves alone. Both new action keys are
+        // allocated from the same pool so they can never collide.
         let vacant_colony = [HotkeyKey::F6, HotkeyKey::F7, HotkeyKey::F9]
             .into_iter()
             .find(|key| *key != trigger && *key != spire_action)
             .expect("two bindings cannot occupy all three fallback keys");
+        let stargate_action = STARGATE_FALLBACK_KEYS
+            .into_iter()
+            .find(|key| *key != trigger && *key != spire_action && *key != vacant_colony)
+            .expect("three bindings cannot occupy all fallback keys");
         Self {
             trigger,
             spire_action,
             vacant_colony,
+            stargate_action,
             emergency: HotkeyKey::EMERGENCY,
         }
     }
@@ -194,25 +207,44 @@ impl Bindings {
         self
     }
 
+    pub const fn with_stargate_action(mut self, key: HotkeyKey) -> Self {
+        self.stargate_action = key;
+        self
+    }
+
     pub const fn get(self, slot: HotkeySlot) -> HotkeyKey {
         match slot {
             HotkeySlot::Trigger => self.trigger,
             HotkeySlot::SpireAction => self.spire_action,
             HotkeySlot::VacantColony => self.vacant_colony,
+            HotkeySlot::StargateAction => self.stargate_action,
             HotkeySlot::Emergency => self.emergency,
         }
     }
 
     /// Slots in registration order, emergency last.
-    pub const fn slots(self) -> [(HotkeySlot, HotkeyKey); 4] {
+    pub const fn slots(self) -> [(HotkeySlot, HotkeyKey); 5] {
         [
             (HotkeySlot::Trigger, self.trigger),
             (HotkeySlot::SpireAction, self.spire_action),
             (HotkeySlot::VacantColony, self.vacant_colony),
+            (HotkeySlot::StargateAction, self.stargate_action),
             (HotkeySlot::Emergency, self.emergency),
         ]
     }
 }
+
+/// Free keys a missing Stargate action binding may fall back to, in order.
+/// F4, F5 and F8 are deliberately absent: F4 is the game's saved view, F5 is
+/// used by the game itself, F8 is the emergency stop.
+pub const STARGATE_FALLBACK_KEYS: [HotkeyKey; 6] = [
+    HotkeyKey::F7,
+    HotkeyKey::F9,
+    HotkeyKey::F10,
+    HotkeyKey::F11,
+    HotkeyKey::F12,
+    HotkeyKey::F6,
+];
 
 /// A registration or unregistration problem, ready to be shown in the UI.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -343,6 +375,7 @@ mod tests {
                 (HotkeySlot::Trigger, HotkeyKey::F6),
                 (HotkeySlot::SpireAction, HotkeyKey::F7),
                 (HotkeySlot::VacantColony, HotkeyKey::F9),
+                (HotkeySlot::StargateAction, HotkeyKey::F10),
                 (HotkeySlot::Emergency, HotkeyKey::F8),
             ]
         );
@@ -368,12 +401,37 @@ mod tests {
         assert_eq!(
             registrar.unregistered(),
             vec![
+                (HotkeySlot::StargateAction, HotkeyKey::F10),
                 (HotkeySlot::VacantColony, HotkeyKey::F9),
                 (HotkeySlot::SpireAction, HotkeyKey::F7),
                 (HotkeySlot::Trigger, HotkeyKey::F6),
             ]
         );
         assert_eq!(registrar.live(), Vec::new());
+    }
+
+    #[test]
+    fn a_stargate_registration_failure_rolls_back_the_other_four() {
+        let mut registrar = FakeRegistrar::default();
+        registrar.fail_on(HotkeySlot::StargateAction, "F7 is taken");
+        let error = register_all(&mut registrar, Bindings::new(HotkeyKey::F6, HotkeyKey::F7))
+            .expect_err("the fourth binding must fail");
+        assert!(matches!(
+            error,
+            HotkeyError::Register {
+                slot: HotkeySlot::StargateAction,
+                ..
+            }
+        ));
+        assert_eq!(
+            registrar.unregistered(),
+            vec![
+                (HotkeySlot::VacantColony, HotkeyKey::F9),
+                (HotkeySlot::SpireAction, HotkeyKey::F7),
+                (HotkeySlot::Trigger, HotkeyKey::F6),
+            ]
+        );
+        assert!(registrar.live().is_empty());
     }
 
     #[test]
@@ -407,6 +465,7 @@ mod tests {
         assert_eq!(
             registrar.unregistered(),
             vec![
+                (HotkeySlot::StargateAction, HotkeyKey::F10),
                 (HotkeySlot::VacantColony, HotkeyKey::F9),
                 (HotkeySlot::SpireAction, HotkeyKey::F7),
                 (HotkeySlot::Trigger, HotkeyKey::F6),

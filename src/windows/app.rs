@@ -79,6 +79,9 @@ struct MacroApp {
     /// The newest Spire result, kept for the card's compact preview. Only the
     /// newest one: no history, no activity log.
     spire_preview: Option<SpirePreview>,
+    /// The newest Stargate result. Separate from the Spire preview so the two
+    /// actions can never cross channels.
+    stargate_preview: Option<SpirePreview>,
     /// Live counters of the F4 search, read from the runner while it runs so a
     /// long sweep is visibly progressing instead of looking stuck.
     vacant_progress: Arc<VacantProgress>,
@@ -99,6 +102,9 @@ enum ActiveRun {
     /// `A` per verified selection. There is no separate read-only pass any
     /// more, so the action key only ever starts this run.
     SpireAction,
+    /// The Stargate action: one full-screen search, then click each detection
+    /// and `A` per verified selection.
+    StargateAction,
     VacantColony,
 }
 
@@ -199,6 +205,7 @@ impl MacroApp {
             runner,
             running: None,
             spire_preview: None,
+            stargate_preview: None,
             vacant_progress,
             foreground: None,
             last_diagnostics: Instant::now()
@@ -280,6 +287,7 @@ impl MacroApp {
         match action_for(slot) {
             HotkeyAction::StartRowBuild => self.start_row_build(),
             HotkeyAction::StartSpireAction => self.start_spire_action(),
+            HotkeyAction::StartStargateAction => self.start_stargate_action(),
             HotkeyAction::StartVacantColony => self.start_vacant_colony(),
             HotkeyAction::EmergencyStop => self.disarm(Some(self.labels.status_emergency)),
         }
@@ -341,6 +349,30 @@ impl MacroApp {
         }
     }
 
+    /// Starts the Stargate action while armed.
+    ///
+    /// The action key always runs the full action: one fresh full-screen scan,
+    /// a click per detection and `A` once per verified selection. It shares the
+    /// single worker slot with the other runs, so F8, disarm and window close
+    /// cancel it the same way and two runs can never overlap.
+    fn start_stargate_action(&mut self) {
+        if !self.armed {
+            self.set_notice(NoticeLevel::Info, self.labels.status_not_armed);
+            return;
+        }
+        let adapter = SendInputAdapter::new(&self.config.target_process);
+        let started = self
+            .runner
+            .try_start_stargate_action(self.config.timing(), Box::new(adapter));
+        match started {
+            Ok(()) => {
+                self.running = Some(ActiveRun::StargateAction);
+                self.notice = None;
+            }
+            Err(error) => self.set_notice(NoticeLevel::Info, self.labels.start_error(error)),
+        }
+    }
+
     fn start_vacant_colony(&mut self) {
         if !self.armed {
             self.set_notice(NoticeLevel::Info, self.labels.status_not_armed);
@@ -378,6 +410,7 @@ impl MacroApp {
         self.notice = None;
         // A result from the replaced settings must not be shown as current.
         self.spire_preview = None;
+        self.stargate_preview = None;
         self.sync_interval_edits();
     }
 
@@ -427,6 +460,13 @@ impl MacroApp {
             let preview = self.labels.spire_action_preview(report);
             self.set_notice(preview.level, preview.headline.clone());
             self.spire_preview = Some(preview);
+        }
+        // The Stargate action has its own report channel and preview, so a
+        // Stargate result is never rendered as a Spire result.
+        if let Some(report) = &finished.stargate_action {
+            let preview = self.labels.stargate_action_preview(report);
+            self.set_notice(preview.level, preview.headline.clone());
+            self.stargate_preview = Some(preview);
         }
         // A read-only scan result is still rendered if one ever arrives: the
         // GUI no longer starts that pass (the action key always runs the full
@@ -496,6 +536,8 @@ impl eframe::App for MacroApp {
                         self.render_row_build_card(ui, &labels);
                         ui.add_space(10.0);
                         self.render_spire_action_card(ui, &labels);
+                        ui.add_space(10.0);
+                        self.render_stargate_action_card(ui, &labels);
                         ui.add_space(10.0);
                         self.render_vacant_colony_card(ui, &labels);
                         ui.add_space(10.0);
@@ -704,13 +746,64 @@ impl MacroApp {
     fn render_spire_action_card(&mut self, ui: &mut egui::Ui, labels: &Labels) {
         let running =
             (self.running == Some(ActiveRun::SpireAction)).then_some(labels.status_running);
-        spire_action_card(
+        // The other action keys and F8 are not offered here.
+        let conflicts = [
+            self.config.trigger_hotkey,
+            self.config.vacant_colony_hotkey,
+            self.config.stargate_action_hotkey,
+            HotkeyKey::F4,
+            HotkeyKey::EMERGENCY,
+        ];
+        building_action_card(
             ui,
             labels,
-            &mut self.config,
+            ActionCardSpec {
+                title: labels.spire_action_title,
+                hint: labels.spire_action_hint,
+                confirm_note: labels.spire_confirm_scope_note,
+                id_salt: "spire_action_hotkey",
+                accent: Color32::from_rgb(0x22, 0xd3, 0xee),
+                fill: Color32::from_rgb(0x0f, 0x1e, 0x23),
+                stroke: Color32::from_rgb(0x1c, 0x44, 0x4e),
+            },
             self.armed,
             running,
             self.spire_preview.as_ref(),
+            &conflicts,
+            &mut self.config.spire_action_hotkey,
+        );
+    }
+
+    /// One compact card for the Stargate detect action. Same action pattern as
+    /// the Spire card, but titled and worded as the Stargate feature and wired
+    /// to its own config key, so the two can never be confused.
+    fn render_stargate_action_card(&mut self, ui: &mut egui::Ui, labels: &Labels) {
+        let running =
+            (self.running == Some(ActiveRun::StargateAction)).then_some(labels.status_running);
+        let conflicts = [
+            self.config.trigger_hotkey,
+            self.config.vacant_colony_hotkey,
+            self.config.spire_action_hotkey,
+            HotkeyKey::F4,
+            HotkeyKey::EMERGENCY,
+        ];
+        building_action_card(
+            ui,
+            labels,
+            ActionCardSpec {
+                title: labels.stargate_action_title,
+                hint: labels.stargate_action_hint,
+                confirm_note: labels.stargate_confirm_scope_note,
+                id_salt: "stargate_action_hotkey",
+                accent: Color32::from_rgb(0xf6, 0xc4, 0x53),
+                fill: Color32::from_rgb(0x22, 0x1c, 0x0f),
+                stroke: Color32::from_rgb(0x65, 0x4b, 0x1c),
+            },
+            self.armed,
+            running,
+            self.stargate_preview.as_ref(),
+            &conflicts,
+            &mut self.config.stargate_action_hotkey,
         );
     }
 
@@ -1207,31 +1300,46 @@ fn row_build_card(
         });
 }
 
-/// One compact card for the Spire detect action.
+/// The static wording and colors one action card is drawn with. The two
+/// actions share the card layout; only this data differs.
+struct ActionCardSpec {
+    title: &'static str,
+    hint: &'static str,
+    confirm_note: &'static str,
+    id_salt: &'static str,
+    accent: Color32,
+    fill: Color32,
+    stroke: Color32,
+}
+
+/// One compact card for a detect action (Spire or Stargate).
 ///
 /// Deliberately distinct from the row-build card and its checkbox: this is not
 /// the `BuildTarget::Spire` row macro. Nothing here starts input — the
 /// registered action key does, and only while the game window is foreground —
 /// and pressing it always runs the action: there is no preview-only switch and
 /// no stored mode, so the card has no control that could turn one on.
-fn spire_action_card(
+#[allow(clippy::too_many_arguments)]
+fn building_action_card(
     ui: &mut egui::Ui,
     labels: &Labels,
-    config: &mut Config,
+    spec: ActionCardSpec,
     armed: bool,
     running: Option<&str>,
     preview: Option<&SpirePreview>,
+    conflicts: &[HotkeyKey],
+    key: &mut HotkeyKey,
 ) {
-    // A cyan accent, so the card cannot be mistaken for the green Creep Colony
-    // or the violet Spire row build.
-    let accent_color = Color32::from_rgb(0x22, 0xd3, 0xee);
+    // A card-specific accent, so the two actions cannot be mistaken for each
+    // other or for the green Creep Colony / violet Spire row build.
+    let accent_color = spec.accent;
     let muted = Color32::from_rgb(0x64, 0x74, 0x8b);
     let label_color = Color32::from_rgb(0x94, 0xa3, 0xb8);
     let editable = !armed;
 
     Frame::new()
-        .fill(Color32::from_rgb(0x0f, 0x1e, 0x23))
-        .stroke(Stroke::new(1.0, Color32::from_rgb(0x1c, 0x44, 0x4e)))
+        .fill(spec.fill)
+        .stroke(Stroke::new(1.0, spec.stroke))
         .corner_radius(CornerRadius::same(8))
         .inner_margin(Margin::same(12))
         .show(ui, |ui| {
@@ -1243,7 +1351,7 @@ fn spire_action_card(
 
                 ui.add_space(4.0);
                 ui.label(
-                    RichText::new(labels.spire_action_title)
+                    RichText::new(spec.title)
                         .strong()
                         .size(14.0)
                         .color(accent_color),
@@ -1289,11 +1397,7 @@ fn spire_action_card(
                 ui.label(RichText::new("→").color(muted));
                 render_keycap(ui, Key::A.name(), false);
             });
-            ui.label(
-                RichText::new(labels.spire_action_hint)
-                    .size(10.0)
-                    .color(muted),
-            );
+            ui.label(RichText::new(spec.hint).size(10.0).color(muted));
 
             ui.add_space(8.0);
 
@@ -1305,20 +1409,7 @@ fn spire_action_card(
                         .color(label_color),
                 );
                 ui.add_enabled_ui(editable, |ui| {
-                    // The row trigger and F8 are not offered here.
-                    let conflicts = [
-                        config.trigger_hotkey,
-                        config.vacant_colony_hotkey,
-                        HotkeyKey::F4,
-                        HotkeyKey::EMERGENCY,
-                    ];
-                    hotkey_combo(
-                        ui,
-                        "spire_action_hotkey",
-                        armed,
-                        &conflicts,
-                        &mut config.spire_action_hotkey,
-                    );
+                    hotkey_combo(ui, spec.id_salt, armed, conflicts, key);
                 });
                 ui.label(
                     RichText::new("F8")
@@ -1339,7 +1430,7 @@ fn spire_action_card(
             // panel read the building type, not who owns it or whether the
             // upgrade is available. Amber, like the other caveats.
             ui.label(
-                RichText::new(format!("⚠ {}", labels.spire_confirm_scope_note))
+                RichText::new(format!("⚠ {}", spec.confirm_note))
                     .size(10.0)
                     .color(Color32::from_rgb(0xfb, 0xbf, 0x24)),
             );

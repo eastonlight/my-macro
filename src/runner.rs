@@ -22,6 +22,7 @@ use crate::hotkey::HotkeySlot;
 use crate::input::{DesktopAdapter, InputAdapter};
 use crate::macros::{BuildTarget, MacroId, Timing};
 use crate::spire_action::{self, SpireActionReport, SpireScanError, SpireScanReport};
+use crate::stargate_action::{self, StargateActionReport};
 use crate::vacant_colony::{self, VacantColonyReport, VacantProgress};
 
 /// What a registered hotkey does while the app is armed.
@@ -35,6 +36,8 @@ pub enum HotkeyAction {
     StartRowBuild,
     /// Start the Spire action (scan, click each crown, verified `A`).
     StartSpireAction,
+    /// Start the Stargate action (scan, click each gate, verified `A`).
+    StartStargateAction,
     StartVacantColony,
     /// Stop the running macro immediately.
     EmergencyStop,
@@ -45,6 +48,7 @@ pub const fn action_for(slot: HotkeySlot) -> HotkeyAction {
     match slot {
         HotkeySlot::Trigger => HotkeyAction::StartRowBuild,
         HotkeySlot::SpireAction => HotkeyAction::StartSpireAction,
+        HotkeySlot::StargateAction => HotkeyAction::StartStargateAction,
         HotkeySlot::VacantColony => HotkeyAction::StartVacantColony,
         HotkeySlot::Emergency => HotkeyAction::EmergencyStop,
     }
@@ -79,6 +83,7 @@ pub struct FinishedReports {
     pub row: Option<RunReport>,
     pub vacant_colony: Option<VacantColonyReport>,
     pub spire_action: Option<SpireActionReport>,
+    pub stargate_action: Option<StargateActionReport>,
     pub spire_scan: Option<Result<SpireScanReport, SpireScanError>>,
 }
 
@@ -87,6 +92,7 @@ impl FinishedReports {
     pub const fn is_empty(&self) -> bool {
         self.row.is_none()
             && self.spire_action.is_none()
+            && self.stargate_action.is_none()
             && self.spire_scan.is_none()
             && self.vacant_colony.is_none()
     }
@@ -104,6 +110,8 @@ pub struct MacroRunner {
     vacant_progress: Arc<VacantProgress>,
     spire_reports: Receiver<SpireActionReport>,
     spire_report_sender: Sender<SpireActionReport>,
+    stargate_reports: Receiver<StargateActionReport>,
+    stargate_report_sender: Sender<StargateActionReport>,
     spire_scan_reports: Receiver<Result<SpireScanReport, SpireScanError>>,
     spire_scan_report_sender: Sender<Result<SpireScanReport, SpireScanError>>,
 }
@@ -113,6 +121,7 @@ impl MacroRunner {
         let (report_sender, reports) = std::sync::mpsc::channel();
         let (vacant_sender, vacant_reports) = std::sync::mpsc::channel();
         let (spire_report_sender, spire_reports) = std::sync::mpsc::channel();
+        let (stargate_report_sender, stargate_reports) = std::sync::mpsc::channel();
         let (spire_scan_report_sender, spire_scan_reports) = std::sync::mpsc::channel();
         Self {
             cancel: Arc::new(AtomicBool::new(false)),
@@ -124,6 +133,8 @@ impl MacroRunner {
             vacant_progress: Arc::new(VacantProgress::default()),
             spire_reports,
             spire_report_sender,
+            stargate_reports,
+            stargate_report_sender,
             spire_scan_reports,
             spire_scan_report_sender,
         }
@@ -279,6 +290,37 @@ impl MacroRunner {
         Ok(())
     }
 
+    /// Starts one Stargate-action run.
+    ///
+    /// Shares the single worker slot with every other run, so F8, disarm and
+    /// window close cancel it exactly like them and no two runs can overlap.
+    /// Its report arrives on its own channel, so a Stargate result can never be
+    /// rendered as a Spire (or row-build) result.
+    pub fn try_start_stargate_action(
+        &mut self,
+        timing: Timing,
+        adapter: Box<dyn DesktopAdapter>,
+    ) -> Result<(), StartError> {
+        if self.worker.is_some() {
+            return Err(StartError::Busy);
+        }
+
+        let cancel = Arc::clone(&self.cancel);
+        let sender = self.stargate_report_sender.clone();
+        let handle = thread::Builder::new()
+            .name("oh-my-macro-stargate".to_owned())
+            .spawn(move || {
+                let mut adapter = adapter;
+                let report = stargate_action_guarded(adapter.as_mut(), &cancel, timing);
+                let _ = sender.send(report);
+            })
+            .map_err(|error| StartError::Thread {
+                detail: error.to_string(),
+            })?;
+        self.worker = Some(handle);
+        Ok(())
+    }
+
     /// Starts one scan-only Spire preview pass.
     ///
     /// Read-only by construction: one capture and one full-screen search on the
@@ -320,6 +362,7 @@ impl MacroRunner {
         self.join_worker();
         while self.reports.try_recv().is_ok() {}
         while self.spire_reports.try_recv().is_ok() {}
+        while self.stargate_reports.try_recv().is_ok() {}
         while self.spire_scan_reports.try_recv().is_ok() {}
     }
 
@@ -345,6 +388,7 @@ impl MacroRunner {
             row: self.poll_report(),
             vacant_colony: self.poll_vacant_colony_report(),
             spire_action: self.poll_spire_report(),
+            stargate_action: self.poll_stargate_report(),
             spire_scan: self.poll_spire_scan_report(),
         }
     }
@@ -371,6 +415,21 @@ impl MacroRunner {
     /// frees the shared worker slot, so the GUI must poll this as well.
     pub fn poll_spire_report(&mut self) -> Option<SpireActionReport> {
         match self.spire_reports.try_recv() {
+            Ok(report) => {
+                self.join_worker();
+                Some(report)
+            }
+            Err(TryRecvError::Empty) | Err(TryRecvError::Disconnected) => None,
+        }
+    }
+
+    /// Returns the finished Stargate action's report, if there is one.
+    ///
+    /// Separate from the Spire channel so the two actions can never be confused
+    /// in the UI. Also frees the shared worker slot, so the GUI must poll this
+    /// as well.
+    pub fn poll_stargate_report(&mut self) -> Option<StargateActionReport> {
+        match self.stargate_reports.try_recv() {
             Ok(report) => {
                 self.join_worker();
                 Some(report)
@@ -484,7 +543,25 @@ fn spire_action_guarded(
         Ok(report) => report,
         Err(_) => {
             let _ = adapter.release_all();
-            SpireActionReport::failed("internal panic while running the Spire action")
+            SpireActionReport::failed("internal panic while running the Spire action", "Spire")
+        }
+    }
+}
+
+/// Runs the Stargate action, releasing injected input even if it panics.
+fn stargate_action_guarded(
+    adapter: &mut dyn DesktopAdapter,
+    cancel: &AtomicBool,
+    timing: Timing,
+) -> StargateActionReport {
+    let guarded = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        stargate_action::run(adapter, cancel, timing)
+    }));
+    match guarded {
+        Ok(report) => report,
+        Err(_) => {
+            let _ = adapter.release_all();
+            stargate_action::failed("internal panic while running the Stargate action")
         }
     }
 }
@@ -1390,6 +1467,7 @@ mod tests {
             let expected = match slot {
                 HotkeySlot::Trigger => HotkeyAction::StartRowBuild,
                 HotkeySlot::SpireAction => HotkeyAction::StartSpireAction,
+                HotkeySlot::StargateAction => HotkeyAction::StartStargateAction,
                 HotkeySlot::VacantColony => HotkeyAction::StartVacantColony,
                 HotkeySlot::Emergency => HotkeyAction::EmergencyStop,
             };
