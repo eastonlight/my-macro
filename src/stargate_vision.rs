@@ -1,12 +1,11 @@
 //! Local Stargate detector: one capture, one full-screen search, no network.
 //!
 //! The Stargate instance of the shared [`crate::building_vision`] profile
-//! detector. The template is one Stargate's upper hull; the click offset lands
+//! detector. The template is one Stargate's lower hull; the click offset lands
 //! on that hull. A Stargate sprite is two separated hulls, so the search
-//! viewport deliberately starts below the top resource bar
-//! ([`SAFE_VIEWPORT`]): the calibration scene has a partially clipped Stargate
-//! at the top edge (`y ≈ -42..214`) whose lower hull must never be clicked, and
-//! every fully visible gate centre sits at `y >= 328`.
+//! viewport extends to the guarded top edge. This also permits a Stargate whose
+//! upper hull is partly clipped by the screen; selection-panel verification
+//! still prevents `A` from being sent when the click does not select a Stargate.
 //!
 //! The committed screenshot is a **single calibration scene**, not evidence of
 //! generalisation. Thresholds were chosen so the six real Stargates pass and
@@ -44,19 +43,20 @@ pub type StargateDetection = BuildingDetection;
 /// Result of one full-screen Stargate scan.
 pub type StargateScan = BuildingScan;
 
-/// Search region: below the top bar so a top-clipped Stargate cannot be
-/// clicked, above the bottom HUD like the Spire profile.
+/// Search region: the guarded top edge through the world area above the HUD.
+/// The resource display itself is excluded by the normal detector/profile
+/// gates and a detected click still requires Stargate portrait verification.
 pub const SAFE_VIEWPORT: Rect = Rect::new(
     crate::play_area::EDGE_GUARD,
-    230,
+    crate::play_area::EDGE_GUARD,
     CLIENT_WIDTH - 2 * crate::play_area::EDGE_GUARD,
-    770 - 230,
+    770 - crate::play_area::EDGE_GUARD,
 );
 /// Hull template size in pixels.
 pub const TEMPLATE_W: i32 = 128;
 /// Hull template size in pixels.
 pub const TEMPLATE_H: i32 = 128;
-/// Where inside the template the click lands: the upper-hull centre.
+/// Where inside the template the click lands: the lower-hull centre.
 pub const TEMPLATE_CLICK_OFFSET: Point = Point::new(64, 64);
 
 /// Screen rectangle of the single-unit information-panel portrait (both hulls),
@@ -64,7 +64,7 @@ pub const TEMPLATE_CLICK_OFFSET: Point = Point::new(64, 64);
 /// unit-name text and above the HP line.
 pub const PORTRAIT_ROI: Rect = Rect::new(608, 874, 160, 140);
 
-/// Grayscale upper-hull template, cropped from `screen.png` at `(648, 264)`.
+/// Grayscale lower-hull template, cropped from `screen.png` at `(704, 356)`.
 const STARGATE_TEMPLATE: &[u8] =
     include_bytes!("../tests/fixtures/stargate-screen-1080/stargate-template-128x128.gray");
 /// Portrait silhouette mask (`255` = sprite pixel), cropped from `screen.png`
@@ -100,13 +100,13 @@ pub fn supported_profile(frame: &Frame) -> bool {
     crate::building_vision::supported_client(frame)
 }
 
-/// Template rectangle for a detection whose upper-hull centre is `center`.
+/// Template rectangle for a detection whose lower-hull centre is `center`.
 pub fn template_rect(center: Point) -> Rect {
     crate::building_vision::template_rect(center, &PROFILE)
 }
 
-/// The embedded hull grayscale pixels (`TEMPLATE_W * TEMPLATE_H`), exposed so
-/// tests can paint a synthetic Stargate without touching the file system.
+/// The embedded lower-hull grayscale pixels (`TEMPLATE_W * TEMPLATE_H`),
+/// exposed so tests can paint a synthetic Stargate without the file system.
 pub fn stargate_template_pixels() -> &'static [u8] {
     STARGATE_TEMPLATE
 }
