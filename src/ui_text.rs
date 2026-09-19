@@ -171,7 +171,6 @@ pub struct Labels {
     pub status_scanning: &'static str,
     pub arm_hint_invalid: &'static str,
     pub advanced_heading: &'static str,
-    pub app_subtitle: &'static str,
 
     pub config_heading: &'static str,
     pub config_path_label: &'static str,
@@ -220,28 +219,28 @@ impl Labels {
     pub const fn korean() -> Self {
         Self {
             lang: Lang::Korean,
-            app_title: "oh-my-macro (StarCraft 1 매크로)",
+            app_title: "oh-my-macro",
             status_heading: "상태",
-            status_armed: "사용 중 — 단축키 등록됨",
-            status_disarmed: "중지됨 — 단축키 해제됨",
+            status_armed: "사용 중",
+            status_disarmed: "중지됨",
             status_running: "실행 중",
             status_idle: "대기",
-            status_emergency: "F8 응급 정지",
-            status_not_armed: "중지 상태라 무시했습니다",
-            arm_button: "사용 시작 (무장)",
-            disarm_button: "중지 (해제)",
-            arm_hint: "무장해야 트리거 단축키와 F8이 동작합니다. 기본값은 중지 상태입니다.",
+            status_emergency: "정지 F8",
+            status_not_armed: "중지 상태입니다",
+            arm_button: "사용 시작",
+            disarm_button: "사용 중지",
+            arm_hint: "사용 시작 후 단축키가 동작합니다. F8로 언제든 정지할 수 있습니다.",
 
             hotkeys_heading: "단축키",
             colony_label: "크립 콜로니 (Creep Colony)",
             spire_label: "둥지탑 (Spire)",
-            emergency_label: "응급 정지",
-            emergency_hint: "F8은 고정이며 변경할 수 없습니다.",
-            hotkeys_locked_hint: "단축키는 중지 상태에서만 바꿀 수 있습니다.",
+            emergency_label: "정지",
+            emergency_hint: "F8은 고정 정지 키입니다.",
+            hotkeys_locked_hint: "사용 중에는 단축키를 바꿀 수 없습니다.",
 
-            timing_heading: "타이밍 (두 단축키 공통)",
-            press_label: "키/버튼 누름 유지 (ms)",
-            gap_label: "동작 사이 간격 (ms)",
+            timing_heading: "입력 타이밍",
+            press_label: "누름 (ms)",
+            gap_label: "간격 (ms)",
             timing_hint: "기본 20ms입니다. 게임이 입력을 놓치면 50ms 전후로 늘려보세요.",
             target_label: "대상 프로세스 (exe 파일명)",
             target_hint: "창 제목이 아니라 실행 파일 이름입니다. 예: StarCraft.exe",
@@ -249,10 +248,10 @@ impl Labels {
 
             sequence_label: "입력 순서",
             trigger_label: "트리거 단축키",
-            trigger_single_hint: "이 단축키 하나가 매크로를 실행합니다. F8은 응급 정지입니다.",
-            timing_text_hint: "숫자를 직접 입력하세요(1-2000 ms). 범위를 벗어나면 적용되지 않고 표시만 됩니다.",
+            trigger_single_hint: "이 단축키로 실행합니다. F8은 정지입니다.",
+            timing_text_hint: "1~2000ms 숫자를 직접 입력하세요.",
             force_build_checkbox: "미리보기 확인 실패 시에도 강행",
-            force_build_hint: "체크하면 초록 미리보기를 잠깐만 확인하고, 그래도 안 보이면 클릭해 계속 진행합니다(명령은 미확인으로 표시).",
+            force_build_hint: "미리보기가 안 보여도 클릭을 계속합니다.",
             unconfirmed_suffix: "건은 미확인(강행)",
             mouse_click_label: "좌클릭",
             row_build_title: "드론 줄짓기 건설",
@@ -260,19 +259,19 @@ impl Labels {
             build_target_label: "건물",
             colony_target_name: "크립 콜로니 (2x2)",
             spire_target_name: "둥지탑 (2x2)",
-            row_build_hint: "트리거 단축키 하나가 이 매크로를 실행합니다. 위 체크박스로 지을 건물(크립 콜로니 또는 둥지탑)을 고르고, 표시된 입력 순서와 공유 타이밍을 사용합니다. 선택한 드론 2~12기를 자동으로 세어 커서 오른쪽으로 한 줄로 짓고, 배치 순서는 왼쪽→오른쪽 또는 양끝→가운데 중에서 고를 수 있습니다(두 순서의 줄 범위는 같고 커서가 맨 왼쪽 발자국). 간격은 건물 크기를 따릅니다: 크립 콜로니 2타일(144px), 둥지탑 2타일(144px). 둥지탑 간격은 타일 계산으로 추정한 값이며 아직 실기 검증되지 않았습니다 — 엄격 모드는 미리보기 확인 실패 시 중단하지만 강행 모드는 계속 클릭합니다. 임시 9번 그룹을 사용하고 1920x1080 HUD만 지원합니다. 표시 수는 완성된 건물이 아니라 보낸 명령 수입니다.",
+            row_build_hint: "선택한 드론 2~12기로 커서 오른쪽에 한 줄 또는 6x2로 건설합니다. 그룹 9 사용 · 1920x1080 전용.",
             row_mode_label: "배치 순서",
             row_mode_left_to_right: "왼쪽→오른쪽",
             row_mode_ends_inward: "양끝→가운데",
             row_mode_grid_6x2: "6x2 (1~6 아래 / 7~12 위)",
-            spire_action_title: "스파이어 감지 동작",
-            spire_action_hotkey_label: "동작 단축키",
-            spire_action_sequence_label: "동작 순서",
-            spire_search_step_label: "전체 화면 SEARCH 1회",
-            spire_action_hint: "무장하고 게임 창이 전면일 때만 동작하며, 동작 단축키를 누르면 바로 실행됩니다(미리보기 전용 모드는 없습니다). 전체 화면 SEARCH 1회에 이어 감지된 위치마다 검증용 캡처를 한 번씩 찍어 선택 패널을 확인합니다(현재 캡처 API는 전체 프레임을 렌더링한 뒤 패널을 잘라내므로 캡처가 1장이라는 뜻은 아니고, 전체 화면 재탐색은 없습니다). 좌표는 저장하지 않으며 1920x1080 리마스터 클라이언트만 지원합니다. 감지기는 캡처 1장으로 보정되어 아직 실기 검증 전입니다. 타이밍과 대상 프로세스는 위 카드와 공유합니다.",
-            spire_confirm_scope_note: "감지와 선택 패널 확인은 그 자리의 건물 종류만 알려줍니다 — 이 스파이어가 내 것인지, 업그레이드가 지금 가능한지는 확인하지 않습니다.",
+            spire_action_title: "스파이어 감지",
+            spire_action_hotkey_label: "단축키",
+            spire_action_sequence_label: "동작",
+            spire_search_step_label: "탐색",
+            spire_action_hint: "화면의 스파이어를 클릭하고, 선택 확인 후에만 A를 누릅니다. 1920x1080 전용.",
+            spire_confirm_scope_note: "소유권과 업그레이드 가능 여부는 확인하지 않습니다.",
             spire_preview_heading: "마지막 결과",
-            spire_preview_empty: "아직 결과가 없습니다 — 게임 창을 전면에 두고 동작 단축키를 누르세요. 입력은 무장 상태에서만 들어갑니다.",
+            spire_preview_empty: "아직 실행 결과가 없습니다.",
             spire_detected_label: "곳 감지",
             spire_positions_label: "감지 위치",
             spire_capture_label: "탐색용 캡처",
@@ -286,16 +285,15 @@ impl Labels {
             spire_a_not_upgrade: "표시된 수는 완성된 업그레이드가 아니라 보낸 A 명령 수입니다.",
             spire_skipped_note: "선택 패널이 스파이어로 확인되지 않은 위치는 A를 보내지 않고 건너뛰었습니다.",
             spire_zero_note: "0곳은 없다는 증명이 아닙니다 — 게임 창이 전면에서 렌더링 중인지 확인하세요.",
-            stargate_action_title: "스타게이트 감지 동작",
-            stargate_action_hint: "무장하고 게임 창이 전면일 때만 동작하며, 동작 단축키를 누르면 바로 실행됩니다(미리보기 전용 모드는 없습니다). 전체 화면 SEARCH 1회에 이어 감지된 위치마다 검증용 캡처를 찍어 선택 패널을 확인하고, 스타게이트로 확인된 곳에만 A를 한 번 보냅니다. 좌표는 저장하지 않으며 1920x1080 리마스터 클라이언트만 지원합니다. 감지기는 캡처 1장으로 보정되어 아직 실기 검증 전입니다. 타이밍과 대상 프로세스는 위 카드와 공유합니다.",
-            stargate_confirm_scope_note: "감지와 선택 패널 확인은 그 자리의 건물 종류만 알려줍니다 — 이 스타게이트가 내 것인지, 지금 업그레이드가 가능한지는 확인하지 않습니다.",
+            stargate_action_title: "스타게이트 감지",
+            stargate_action_hint: "화면의 스타게이트를 클릭하고, 선택 확인 후에만 A를 누릅니다. 1920x1080 전용.",
+            stargate_confirm_scope_note: "소유권과 업그레이드 가능 여부는 확인하지 않습니다.",
             stargate_recall_f2_checkbox: "실행 전에 F2 화면 호출",
-            stargate_recall_f2_hint: "체크하면 매크로가 F2를 누르고 화면이 안정된 뒤 스타게이트 기능을 수행합니다.",
-            stargate_skipped_note: "선택 패널이 스타게이트로 확인되지 않은 위치는 A를 보내지 않고 건너뛰었습니다.",
+            stargate_recall_f2_hint: "F2 화면으로 이동한 뒤 스타게이트를 탐색합니다.",
+            stargate_skipped_note: "스타게이트로 확인되지 않으면 A를 보내지 않습니다.",
             status_scanning: "스캔 중",
-            arm_hint_invalid: "설정이 올바르지 않아 무장할 수 없습니다 — 단축키가 서로 겹치지 않는지 확인하세요.",
-            advanced_heading: "고급 설정 및 파일 관리",
-            app_subtitle: "스타크래프트 1 빠른 건설 매크로",
+            arm_hint_invalid: "설정을 확인하세요. 단축키가 겹치면 시작할 수 없습니다.",
+            advanced_heading: "설정",
 
             config_heading: "설정 파일",
             config_path_label: "경로",
@@ -314,7 +312,7 @@ impl Labels {
             hotkey_slot_trigger: "줄짓기 실행",
             hotkey_slot_spire_action: "스파이어 동작",
             hotkey_slot_stargate_action: "스타게이트 동작",
-            hotkey_slot_emergency: "응급 정지",
+            hotkey_slot_emergency: "정지",
 
             diag_heading: "안전 점검",
             diag_foreground: "현재 전면 창 프로세스",
@@ -333,10 +331,10 @@ impl Labels {
             vacant_colony_sequence_label: "한 번 실행",
             vacant_colony_search_step_label: "빈자리 탐색·검증",
             vacant_colony_confirm_step_label: "변이 시작 확인",
-            vacant_colony_caveat: "미리보기가 확인된 곳에만 클릭합니다(강행 없음). 변이 시작 확인은 실제 캡처 1장으로 보정한 패널 판정이며 실기 검증 전입니다. 화면 한 장만 탐색합니다.",
-            note_select_drone: "드론 2~12기를 선택한 뒤 트리거 단축키를 누르면 커서 자리부터 오른쪽으로 한 줄로 지어집니다. 실행키(기본 F6)는 게임의 F4 저장 화면으로 이동해 빈자리를 검증하며 지으므로, 먼저 게임에서 F4 화면을 지정해 두세요. 좌표는 저장하지 않습니다.",
-            note_chat: "게임 채팅이나 입력 중에는 사용하지 마세요. 채팅 상태를 감지하지 못합니다.",
-            note_online: "온라인/랭크/토너먼트 경기에서는 규정 위반이 될 수 있습니다. README를 먼저 확인하세요.",
+            vacant_colony_caveat: "확인된 빈자리에만 건설합니다. 최대 탐색 60초.",
+            note_select_drone: "줄짓기: 드론 2~12기를 선택하고 커서를 첫 위치에 둡니다. F6 기능은 게임의 F4 저장 화면을 사용합니다.",
+            note_chat: "게임 채팅 입력 중에는 사용하지 마세요.",
+            note_online: "온라인 경기에서는 이용 규정을 확인하세요.",
             note_language_fallback: "한글 글꼴을 찾지 못해 영어로 표시합니다.",
         }
     }
@@ -344,28 +342,28 @@ impl Labels {
     pub const fn english() -> Self {
         Self {
             lang: Lang::English,
-            app_title: "oh-my-macro (StarCraft 1 macros)",
+            app_title: "oh-my-macro",
             status_heading: "Status",
-            status_armed: "Armed — hotkeys registered",
-            status_disarmed: "Disarmed — hotkeys released",
+            status_armed: "Active",
+            status_disarmed: "Stopped",
             status_running: "Running",
             status_idle: "Idle",
-            status_emergency: "F8 emergency stop",
-            status_not_armed: "ignored: not armed",
-            arm_button: "Arm",
-            disarm_button: "Disarm",
-            arm_hint: "The trigger key and F8 only work while armed. The app starts disarmed.",
+            status_emergency: "Stop F8",
+            status_not_armed: "ignored: stopped",
+            arm_button: "Start",
+            disarm_button: "Stop",
+            arm_hint: "Press Start to enable hotkeys. Press F8 anytime to stop.",
 
             hotkeys_heading: "Hotkeys",
             colony_label: "Creep Colony",
             spire_label: "Spire",
-            emergency_label: "Emergency stop",
-            emergency_hint: "F8 is fixed and cannot be changed.",
-            hotkeys_locked_hint: "Hotkeys can only be changed while disarmed.",
+            emergency_label: "Stop",
+            emergency_hint: "F8 is the fixed stop key.",
+            hotkeys_locked_hint: "Hotkeys cannot be changed while active.",
 
-            timing_heading: "Timing (both hotkeys)",
-            press_label: "Key/button hold time (ms)",
-            gap_label: "Delay between actions (ms)",
+            timing_heading: "Input timing",
+            press_label: "Hold (ms)",
+            gap_label: "Gap (ms)",
             timing_hint: "The 20 ms default is fast; increase toward 50 ms if the game misses input.",
             target_label: "Target process (exe basename)",
             target_hint: "Exe file name, not a window title, e.g. StarCraft.exe",
@@ -373,10 +371,10 @@ impl Labels {
 
             sequence_label: "Sequence",
             trigger_label: "Trigger Hotkey",
-            trigger_single_hint: "This one key runs the macro. F8 is the emergency stop.",
-            timing_text_hint: "Type the value (1-2000 ms). An out-of-range entry is flagged and not applied.",
+            trigger_single_hint: "This hotkey runs the macro. F8 stops it.",
+            timing_text_hint: "Enter a number from 1 to 2000 ms.",
             force_build_checkbox: "Keep going without a confirmed preview",
-            force_build_hint: "When checked, the preview is only confirmed briefly; if it still cannot be confirmed, a click is sent and the run continues (those orders are marked unconfirmed).",
+            force_build_hint: "Continue clicking when the preview is not visible.",
             unconfirmed_suffix: "unconfirmed (forced)",
             mouse_click_label: "Click",
             row_build_title: "Drone row build",
@@ -384,19 +382,19 @@ impl Labels {
             build_target_label: "Building",
             colony_target_name: "Creep Colony (2x2)",
             spire_target_name: "Spire (2x2)",
-            row_build_hint: "The one trigger key runs this macro. The checkbox above picks the building (Creep Colony or Spire) for the shown build sequence and the shared timing. It counts the selected drones (2-12) and builds a row to the right of the cursor, with the row order set to left to right or ends inward (both cover the same span, the cursor staying the leftmost footprint). Spacing follows the building: Creep Colony 2 tiles (144 px), Spire 2 tiles (144 px). The Spire spacing is inferred from tile math and is NOT live-verified yet; with the forced mode off, a failed green preview check stops the run instead of clicking. Uses scratch group 9, 1920x1080 HUD only. The count shown is orders issued, not finished buildings.",
+            row_build_hint: "Builds a row or 6x2 grid to the right with 2-12 selected drones. Uses group 9 - 1920x1080 only.",
             row_mode_label: "Row order",
             row_mode_left_to_right: "Left to right",
             row_mode_ends_inward: "Ends inward",
             row_mode_grid_6x2: "6x2 (1-6 bottom / 7-12 top)",
-            spire_action_title: "Spire detect action",
-            spire_action_hotkey_label: "Action hotkey",
-            spire_action_sequence_label: "Sequence",
-            spire_search_step_label: "full-screen SEARCH x1",
-            spire_action_hint: "Runs only while armed and while the game window is in front, and the action hotkey starts it immediately - there is no preview-only mode. One full-screen SEARCH is followed by a verification capture for every detected position to read the selection panel (the current capture API renders the full frame before cropping the panel, so this is a capture per target, not a single capture in total, and there is no second full-screen search). No coordinate is stored, and only the 1920x1080 Remastered client is supported. The detector is calibrated on one screenshot and is not live-verified yet. Timing and the target process are shared with the row-build card above.",
-            spire_confirm_scope_note: "A detection and a confirmed selection panel only tell you the building type at that spot - they do not check that the Spire is yours or that the upgrade is available right now.",
+            spire_action_title: "Spire detection",
+            spire_action_hotkey_label: "Hotkey",
+            spire_action_sequence_label: "Action",
+            spire_search_step_label: "Scan",
+            spire_action_hint: "Clicks visible Spires and presses A only after verifying the selection. 1920x1080 only.",
+            spire_confirm_scope_note: "Ownership and upgrade availability are not checked.",
             spire_preview_heading: "Last result",
-            spire_preview_empty: "No result yet - put the game window in front and press the action hotkey. Input is only injected while armed.",
+            spire_preview_empty: "No result yet.",
             spire_detected_label: "detected",
             spire_positions_label: "positions",
             spire_capture_label: "scan capture",
@@ -410,16 +408,15 @@ impl Labels {
             spire_a_not_upgrade: "The count is A commands sent, not completed upgrades.",
             spire_skipped_note: "Positions whose selection panel was not confirmed as the Spire were skipped without A.",
             spire_zero_note: "0 found is not proof that there is none - check that the game window is in front and rendering.",
-            stargate_action_title: "Stargate detect action",
-            stargate_action_hint: "Runs only while armed and while the game window is in front, and the action hotkey starts it immediately - there is no preview-only mode. One full-screen SEARCH is followed by a verification capture per detected position to read the selection panel, and A is sent once only where the panel is confirmed as a Stargate. No coordinate is stored, and only the 1920x1080 Remastered client is supported. The detector is calibrated on one screenshot and is not live-verified yet. Timing and the target process are shared with the row-build card above.",
-            stargate_confirm_scope_note: "A detection and a confirmed selection panel only tell you the building type at that spot - they do not check that the Stargate is yours or that an upgrade is available right now.",
+            stargate_action_title: "Stargate detection",
+            stargate_action_hint: "Clicks visible Stargates and presses A only after verifying the selection. 1920x1080 only.",
+            stargate_confirm_scope_note: "Ownership and upgrade availability are not checked.",
             stargate_recall_f2_checkbox: "Recall F2 before running",
-            stargate_recall_f2_hint: "When checked, the macro taps F2, waits for the view to settle, then runs the Stargate action.",
-            stargate_skipped_note: "Positions whose selection panel was not confirmed as the Stargate were skipped without A.",
+            stargate_recall_f2_hint: "Recall the F2 view before scanning Stargates.",
+            stargate_skipped_note: "No A is sent unless the Stargate is confirmed.",
             status_scanning: "Scanning",
-            arm_hint_invalid: "Cannot arm: the settings are invalid - the hotkeys must not collide.",
-            advanced_heading: "Advanced Settings & Diagnostics",
-            app_subtitle: "StarCraft 1 Quick Build Helper",
+            arm_hint_invalid: "Check the settings. Conflicting hotkeys prevent Start.",
+            advanced_heading: "Settings",
 
             config_heading: "Settings file",
             config_path_label: "Path",
@@ -438,7 +435,7 @@ impl Labels {
             hotkey_slot_trigger: "row build",
             hotkey_slot_spire_action: "spire action",
             hotkey_slot_stargate_action: "stargate action",
-            hotkey_slot_emergency: "emergency stop",
+            hotkey_slot_emergency: "stop",
 
             diag_heading: "Safety check",
             diag_foreground: "Foreground process",
@@ -457,10 +454,10 @@ impl Labels {
             vacant_colony_sequence_label: "one run",
             vacant_colony_search_step_label: "probe and verify free space",
             vacant_colony_confirm_step_label: "confirm morph start",
-            vacant_colony_caveat: "Clicks only where a fresh preview is confirmed (no forced clicks). Morph-start confirmation is a panel classifier calibrated from one real capture; not live-validated. It searches a single screen.",
-            note_select_drone: "Select 2-12 drones, then press the trigger key to build a row to the right of the cursor. The third key (default F6) recalls the game's saved F4 view and only builds on verified free space, so save that view in game first. No coordinate is stored.",
-            note_chat: "Do not use while typing in game chat: chat state is not detected.",
-            note_online: "May violate online/ranked/tournament rules. Read the README first.",
+            vacant_colony_caveat: "Builds only on verified free space. Search limit: 60 seconds.",
+            note_select_drone: "Row build: select 2-12 drones and place the cursor at the first position. F6 uses the game's saved F4 view.",
+            note_chat: "Do not use while typing in game chat.",
+            note_online: "Check the rules before using it in online matches.",
             note_language_fallback: "No Korean font was found, showing English.",
         }
     }
@@ -509,10 +506,10 @@ impl Labels {
     pub fn vacant_colony_hint(&self) -> &'static str {
         match self.lang {
             Lang::Korean => {
-                "크립과 여유 공간이 있는 화면을 게임의 F4에 미리 저장하세요. 드론 2~12기 선택 → 실행키 → F4 이동 → 왼쪽 아래부터 오른쪽으로, 다음 줄은 위로 탐색 → 초록 미리보기 두 번 확인 → 건설 명령 → 그 드론의 변이 시작(콜로니 패널) 확인 후 다음 드론. 그룹 9 사용 · 강행 없음 · 같은 타이밍 사용. F4는 실행키로 지정할 수 없습니다. 탐색 최대 60초 · 드론당 변이 대기 최대 30초(캡처가 끝날 때까지 멈출 수 없어 초과할 수 있음) · 실기 검증 전입니다."
+                "게임의 F4에 빈 건설 화면을 저장해 두세요. 선택한 드론 2~12기로 확인된 빈자리만 순서대로 건설합니다."
             }
             Lang::English => {
-                "Save a view with creep and free space to in-game F4 first. Select 2–12 drones, then trigger: F4 → search from the lower left to the right, then up → confirm a stable green preview twice → Colony order → wait for that drone's morph panel before the next drone. Uses group 9 and shared timing; never forces placement. F4 stays reserved for the game. Search budget 60s, per-drone morph wait 30s; blocking captures cannot be interrupted, so waits can overshoot. Not live-validated yet."
+                "Save a clear build view to in-game F4. Builds verified free positions in order with 2-12 selected drones."
             }
         }
     }
@@ -898,8 +895,6 @@ mod tests {
         let labels = Labels::korean();
         assert_eq!(labels.lang, Lang::Korean);
         for text in [
-            labels.app_title,
-            labels.app_subtitle,
             labels.arm_button,
             labels.disarm_button,
             labels.note_select_drone,
@@ -956,7 +951,6 @@ mod tests {
         assert_eq!(labels.lang, Lang::English);
         for text in [
             labels.app_title,
-            labels.app_subtitle,
             labels.arm_button,
             labels.note_select_drone,
             labels.note_chat,
@@ -1009,38 +1003,17 @@ mod tests {
     }
 
     #[test]
-    fn the_action_hint_states_one_search_and_per_target_verification_captures() {
-        // The card must not promise "one capture": the current adapter renders
-        // the full frame and then crops the panel, once per detected target.
-        let korean = Labels::korean().spire_action_hint;
-        assert!(korean.contains("SEARCH"), "{korean}");
-        assert!(korean.contains("검증"), "{korean}");
-        assert!(korean.contains("캡처"), "{korean}");
-        assert!(korean.contains("위치마다"), "{korean}");
-
-        let english = Labels::english().spire_action_hint;
-        let lower = english.to_lowercase();
-        assert!(lower.contains("search"), "{english}");
-        assert!(lower.contains("verification capture"), "{english}");
-        assert!(lower.contains("detected position"), "{english}");
-
+    fn action_hints_are_short_and_keep_the_verification_contract() {
         for labels in [Labels::korean(), Labels::english()] {
-            // The sequence row itself names the read-only step first.
-            let step = labels.spire_search_step_label;
-            assert!(step.contains("SEARCH") && step.contains('1'), "{step}");
             let hint = labels.spire_action_hint;
-            // No leftover offer of a scan-only/preview mode or of a checkbox.
-            assert!(!hint.contains("스캔만"), "{hint}");
-            assert!(!hint.contains("scan only"), "{hint}");
-            assert!(!hint.contains("체크"), "{hint}");
+            assert!(hint.chars().count() < 120, "{hint}");
             assert!(
-                !hint.contains("checkbox") && !hint.contains("box"),
+                hint.contains("선택 확인") || hint.contains("verifying the selection"),
                 "{hint}"
             );
-            assert!(
-                !hint.contains("미리보기 전용") || hint.contains("없습니다"),
-                "{hint}"
-            );
+            assert!(hint.contains("1920x1080"), "{hint}");
+            assert!(labels.spire_action_title.chars().count() < 24);
+            assert!(labels.stargate_action_title.chars().count() < 24);
         }
     }
 
@@ -1076,35 +1049,20 @@ mod tests {
     }
 
     #[test]
-    fn the_hint_names_the_trigger_the_checkbox_and_the_spacing() {
+    fn row_hint_is_short_and_keeps_the_required_constraints() {
         for labels in [Labels::korean(), Labels::english()] {
             let hint = labels.row_build_hint;
+            assert!(hint.chars().count() < 150, "{hint}");
+            assert!(hint.contains("2~12") || hint.contains("2-12"), "{hint}");
+            assert!(hint.contains("1920x1080"), "{hint}");
             assert!(
-                hint.contains("트리거") || hint.contains("trigger key"),
+                hint.contains("그룹 9") || hint.contains("group 9"),
                 "{hint}"
             );
-            assert!(hint.contains("144"), "{hint}");
-            assert!(
-                !hint.contains("216"),
-                "both buildings share the 144 px pitch now: {hint}"
-            );
-            // Both buildings are described as 2x2 now that they share the pitch.
-            assert!(
-                labels.colony_target_name.contains("2x2"),
-                "{}",
-                labels.colony_target_name
-            );
-            assert!(
-                labels.spire_target_name.contains("2x2"),
-                "{}",
-                labels.spire_target_name
-            );
+            assert!(labels.colony_target_name.contains("2x2"));
+            assert!(labels.spire_target_name.contains("2x2"));
             assert_ne!(labels.build_spire_checkbox, labels.colony_target_name);
         }
-        assert_ne!(
-            Labels::english().build_spire_checkbox,
-            Labels::english().row_build_title
-        );
     }
 
     #[test]
@@ -1513,30 +1471,18 @@ mod tests {
     }
 
     #[test]
-    fn the_third_feature_hint_names_the_recall_key_and_the_limits() {
+    fn the_third_feature_hint_is_short_and_names_the_saved_view() {
         for labels in [Labels::korean(), Labels::english()] {
             let hint = labels.vacant_colony_hint();
             assert!(hint.contains("F4"), "{hint}");
             assert!(hint.contains("2") && hint.contains("12"), "{hint}");
+            assert!(hint.chars().count() < 150, "{hint}");
             assert!(!labels.vacant_colony_title().is_empty());
         }
-        let korean = Labels::korean();
-        let english = Labels::english();
-        assert_ne!(korean.vacant_colony_hint(), english.vacant_colony_hint());
-        assert_ne!(korean.vacant_colony_title(), english.vacant_colony_title());
-        // The key the feature presses must be named, and the fact that the
-        // search is not live-validated must survive in both languages.
-        assert!(
-            korean
-                .vacant_colony_hint()
-                .contains("F4는 실행키로 지정할 수 없습니다")
+        assert_ne!(
+            Labels::korean().vacant_colony_hint(),
+            Labels::english().vacant_colony_hint()
         );
-        assert!(
-            english
-                .vacant_colony_hint()
-                .contains("F4 stays reserved for the game")
-        );
-        assert!(english.vacant_colony_hint().contains("Not live-validated"));
     }
 
     #[test]

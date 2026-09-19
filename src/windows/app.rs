@@ -50,8 +50,8 @@ pub fn run() -> Result<(), String> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("oh-my-macro")
-            .with_inner_size([620.0, 580.0])
-            .with_min_inner_size([460.0, 380.0]),
+            .with_inner_size([680.0, 640.0])
+            .with_min_inner_size([500.0, 420.0]),
         ..Default::default()
     };
     eframe::run_native(
@@ -530,19 +530,19 @@ impl eframe::App for MacroApp {
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
                         self.render_header(ui, &labels);
-                        ui.add_space(8.0);
+                        ui.add_space(6.0);
                         self.render_control_bar(ui, &labels);
-                        ui.add_space(8.0);
+                        ui.add_space(6.0);
                         self.render_status_notifications(ui, &labels);
+                        ui.add_space(6.0);
+                        self.render_spire_action_card(ui, &labels);
+                        ui.add_space(8.0);
+                        self.render_stargate_action_card(ui, &labels);
                         ui.add_space(8.0);
                         self.render_row_build_card(ui, &labels);
-                        ui.add_space(10.0);
-                        self.render_spire_action_card(ui, &labels);
-                        ui.add_space(10.0);
-                        self.render_stargate_action_card(ui, &labels);
-                        ui.add_space(10.0);
+                        ui.add_space(8.0);
                         self.render_vacant_colony_card(ui, &labels);
-                        ui.add_space(10.0);
+                        ui.add_space(8.0);
                         self.render_advanced_section(ui, &labels);
                     });
             });
@@ -552,25 +552,18 @@ impl eframe::App for MacroApp {
 impl MacroApp {
     fn render_header(&self, ui: &mut egui::Ui, labels: &Labels) {
         ui.horizontal(|ui| {
-            ui.vertical(|ui| {
-                ui.horizontal(|ui| {
-                    ui.label(
-                        RichText::new(labels.app_title)
-                            .strong()
-                            .size(17.0)
-                            .color(Color32::from_rgb(0xf1, 0xf5, 0xf9)),
-                    );
-                    ui.label(
-                        RichText::new("v0.1.0")
-                            .monospace()
-                            .size(11.0)
-                            .color(Color32::from_rgb(0x64, 0x74, 0x8b)),
-                    );
-                });
+            ui.horizontal(|ui| {
                 ui.label(
-                    RichText::new(labels.app_subtitle)
-                        .size(11.0)
-                        .color(Color32::from_rgb(0x94, 0xa3, 0xb8)),
+                    RichText::new(labels.app_title)
+                        .strong()
+                        .size(18.0)
+                        .color(Color32::from_rgb(0xf1, 0xf5, 0xf9)),
+                );
+                ui.label(
+                    RichText::new("v0.1.0")
+                        .monospace()
+                        .size(10.5)
+                        .color(Color32::from_rgb(0x64, 0x74, 0x8b)),
                 );
             });
 
@@ -773,6 +766,7 @@ impl MacroApp {
             self.spire_preview.as_ref(),
             &conflicts,
             &mut self.config.spire_action_hotkey,
+            None,
         );
     }
 
@@ -806,17 +800,11 @@ impl MacroApp {
             self.stargate_preview.as_ref(),
             &conflicts,
             &mut self.config.stargate_action_hotkey,
-        );
-        ui.add_enabled_ui(!self.armed, |ui| {
-            ui.checkbox(
+            Some((
                 &mut self.config.stargate_recall_f2,
                 labels.stargate_recall_f2_checkbox,
-            );
-        });
-        ui.label(
-            RichText::new(labels.stargate_recall_f2_hint)
-                .size(10.0)
-                .color(MUTED),
+                labels.stargate_recall_f2_hint,
+            )),
         );
     }
 
@@ -1207,15 +1195,15 @@ fn row_build_card(
                     );
                 });
                 ui.label(
+                    RichText::new(labels.emergency_label)
+                        .size(10.5)
+                        .color(Color32::from_rgb(0x64, 0x74, 0x8b)),
+                );
+                ui.label(
                     RichText::new("F8")
                         .monospace()
                         .size(11.0)
                         .color(Color32::from_rgb(0xf8, 0x71, 0x71)),
-                );
-                ui.label(
-                    RichText::new(labels.emergency_label)
-                        .size(10.5)
-                        .color(Color32::from_rgb(0x64, 0x74, 0x8b)),
                 );
             });
             ui.label(
@@ -1342,6 +1330,7 @@ fn building_action_card(
     preview: Option<&SpirePreview>,
     conflicts: &[HotkeyKey],
     key: &mut HotkeyKey,
+    extra_toggle: Option<(&mut bool, &str, &str)>,
 ) {
     // A card-specific accent, so the two actions cannot be mistaken for each
     // other or for the green Creep Colony / violet Spire row build.
@@ -1389,17 +1378,16 @@ fn building_action_card(
             });
 
             ui.add_space(6.0);
-            ui.separator();
-            ui.add_space(6.0);
-
-            // What one run sends: one full-screen search, then a click per
-            // detection, then `A` per verified selection.
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 ui.label(
-                    RichText::new(labels.spire_action_sequence_label)
+                    RichText::new(labels.spire_action_hotkey_label)
                         .size(11.0)
                         .color(label_color),
                 );
+                ui.add_enabled_ui(editable, |ui| {
+                    hotkey_combo(ui, spec.id_salt, armed, conflicts, key);
+                });
+                ui.separator();
                 ui.label(
                     RichText::new(labels.spire_search_step_label)
                         .size(11.0)
@@ -1409,44 +1397,28 @@ fn building_action_card(
                 render_keycap(ui, labels.mouse_click_label, true);
                 ui.label(RichText::new("→").color(muted));
                 render_keycap(ui, Key::A.name(), false);
-            });
-            ui.label(RichText::new(spec.hint).size(10.0).color(muted));
-
-            ui.add_space(8.0);
-
-            // The action key and the fixed emergency key.
-            ui.horizontal(|ui| {
-                ui.label(
-                    RichText::new(labels.spire_action_hotkey_label)
-                        .size(11.0)
-                        .color(label_color),
-                );
-                ui.add_enabled_ui(editable, |ui| {
-                    hotkey_combo(ui, spec.id_salt, armed, conflicts, key);
-                });
-                ui.label(
-                    RichText::new("F8")
-                        .monospace()
-                        .size(11.0)
-                        .color(Color32::from_rgb(0xf8, 0x71, 0x71)),
-                );
+                ui.separator();
                 ui.label(
                     RichText::new(labels.emergency_label)
                         .size(10.5)
-                        .color(muted),
+                        .color(Color32::from_rgb(0xf8, 0x71, 0x71)),
                 );
+                render_keycap(ui, HotkeyKey::EMERGENCY.label(), false);
             });
-
-            ui.add_space(8.0);
-
-            // What a detection does *not* prove: the detector and the selection
-            // panel read the building type, not who owns it or whether the
-            // upgrade is available. Amber, like the other caveats.
+            ui.add_space(4.0);
+            ui.label(RichText::new(spec.hint).size(10.5).color(muted));
             ui.label(
                 RichText::new(format!("⚠ {}", spec.confirm_note))
                     .size(10.0)
                     .color(Color32::from_rgb(0xfb, 0xbf, 0x24)),
             );
+            if let Some((value, label, hint)) = extra_toggle {
+                ui.add_space(4.0);
+                ui.horizontal_wrapped(|ui| {
+                    ui.add_enabled(editable, egui::Checkbox::new(value, label));
+                    ui.label(RichText::new(hint).size(10.0).color(muted));
+                });
+            }
 
             if armed {
                 ui.add_space(3.0);
@@ -1457,9 +1429,9 @@ fn building_action_card(
                 );
             }
 
-            ui.add_space(8.0);
-            ui.separator();
             ui.add_space(6.0);
+            ui.separator();
+            ui.add_space(4.0);
 
             // The newest result only: no history, no activity log.
             ui.label(
@@ -1488,12 +1460,6 @@ fn building_action_card(
                                 .size(10.5)
                                 .color(Color32::from_rgb(0xc4, 0xcc, 0xd8)),
                         );
-                    }
-                    if let Some(timings) = &preview.timings {
-                        ui.label(RichText::new(timings).size(10.5).color(label_color));
-                    }
-                    for note in &preview.notes {
-                        ui.label(RichText::new(format!("• {note}")).size(10.0).color(muted));
                     }
                 }
                 None => {
@@ -1612,15 +1578,15 @@ fn render_emergency_badge(ui: &mut egui::Ui, labels: &Labels) {
             ui.spacing_mut().item_spacing.x = 4.0;
             ui.label(RichText::new("🛑").size(12.0));
             ui.label(
+                RichText::new(labels.emergency_label)
+                    .size(11.0)
+                    .color(Color32::from_rgb(0xfc, 0xa5, 0xa5)),
+            );
+            ui.label(
                 RichText::new(HotkeyKey::EMERGENCY.label())
                     .strong()
                     .size(12.0)
                     .color(Color32::from_rgb(0xf8, 0x71, 0x71)),
-            );
-            ui.label(
-                RichText::new(labels.emergency_label)
-                    .size(11.0)
-                    .color(Color32::from_rgb(0xfc, 0xa5, 0xa5)),
             );
         })
         .response
