@@ -13,23 +13,24 @@ desktop content outside the game client is included.
 
 ## What the scene pins down
 
-`detect_spires` reports the 22 clicks below (exact list:
+`detect_spires` reports the 18 actionable clicks below (exact list:
 `the_clipped_fixture_yields_every_visible_spire`).
 
 | click `y` | click `x` | reached by |
 |-----------|-----------|------------|
-| 40 | 826, 970, 1114, 1258, 1402 | top-band body fragment |
-| 122 | 826, 1114, 1258, 1402 | primary crown template |
+| 40 | 826, 970, 1114, 1258, 1402 | preferred top-band body fragment |
 | 265 | 34 | left-edge crown fragment |
 | 265/266 | 826, 970, 1258, 1402 | primary crown template |
 | 409/410 | 682, 826, 970, 1114, 1258 | primary crown template |
 | 625/626 | 538, 1114, 1258 | primary crown template |
 
-- The five top-edge Spires sit exactly 144 px above the row at `y = 122`, so
-  their crown centres are at `y ≈ -22`, leaving only the lowest crown rows and
-  upper body on screen. A crown-only fragment did not separate from terrain, so
-  the combined fragment clicks the visible body at `y = 40`; the selection panel
-  still has to verify a Spire before `A` is sent.
+- The five top-row Spires overlap the row underneath. Controlled live probes
+  showed that clicking their detected crown coordinates around `y = 122` selects
+  the next Spire below, while clicking the opaque upper body at `y = 40` selects
+  and verifies the intended top-row Spire. The body fragment therefore has
+  priority and suppresses the overlapping crown detections.
+- The top-band pass also recovers the Spire at `x = 970`, whose crown template
+  does not meet the primary pass threshold.
 - The left-edge Spire's crown centre is `(34, 265)`: its crown's left 14 columns
   are outside the client, so the primary 96×96 template can never be placed in
   frame (best in-frame NCC `0.31`). The crown's right 80 columns are fully visible
@@ -49,10 +50,10 @@ time, so the committed bytes cannot silently drift.
   `LEFT_EDGE_PROFILE` with a `(48 - 16, 48)` click offset, so the click stays on
   the crown centre instead of drifting to the right.
 - `spire-top-band-64x64.gray` — grayscale crop of this fixture's own visible
-  Spire body at `(794, 144)` (`TOP_BAND_CROP`): the crown's lowest rows and the
-  upper body of the Spire at `(826, 122)`. Matching that window in the top band
-  reports the body of the Spire 144 px above it; the click offset `(32, 40)`
-  lands on the visible body.
+  Spire body at `(794, 144)` (`TOP_BAND_CROP`). Matching it in the top band
+  produces the safe upper-body click `(x, 40)`, mapped to the overlapping crown
+  anchor `(x, 122)` for deduplication. Live probes confirmed the body click selects
+  the intended top-row Spire.
 
 ## Scope caveat
 

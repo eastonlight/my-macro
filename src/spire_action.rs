@@ -1,4 +1,4 @@
-//! The Spire action: one capture, click each detected crown, verify, press `A`.
+//! The Spire action: one capture, click each actionable target, verify, press `A`.
 //!
 //! This is the Spire wrapper around the shared
 //! [`crate::building_action`] executor, which documents the flow and the safety
@@ -45,7 +45,12 @@ pub fn scan_once(
     adapter: &mut dyn DesktopAdapter,
     cancel: &AtomicBool,
 ) -> Result<SpireScanReport, SpireScanError> {
-    building_action::scan_once(adapter, cancel, &crate::spire_vision::PROFILE)
+    building_action::scan_once_with_detector(
+        adapter,
+        cancel,
+        &crate::spire_vision::PROFILE,
+        Some(crate::spire_vision::detect_spires),
+    )
 }
 
 /// Runs the Spire action once.
@@ -57,7 +62,14 @@ pub fn run(
     cancel: &AtomicBool,
     timing: Timing,
 ) -> SpireActionReport {
-    building_action::run(adapter, cancel, timing, &crate::spire_vision::PROFILE)
+    building_action::run_after_key_with_detector(
+        adapter,
+        cancel,
+        timing,
+        &crate::spire_vision::PROFILE,
+        None,
+        Some(crate::spire_vision::detect_spires),
+    )
 }
 
 #[cfg(test)]
@@ -74,6 +86,11 @@ mod tests {
 
     fn fixture(name: &str) -> Frame {
         let path = PathBuf::from("tests/fixtures/spire-screen-1080").join(name);
+        Frame::from_png(&path).unwrap_or_else(|error| panic!("{path:?}: {error}"))
+    }
+
+    fn clipped(name: &str) -> Frame {
+        let path = PathBuf::from("tests/fixtures/spire-clipped-1080").join(name);
         Frame::from_png(&path).unwrap_or_else(|error| panic!("{path:?}: {error}"))
     }
 
@@ -331,6 +348,41 @@ mod tests {
             &fake.events()[first_a - 3..first_a],
             ["move(790,158)", "down", "up"]
         );
+    }
+
+    #[test]
+    fn live_action_uses_the_edge_aware_detector_and_safe_top_body_clicks() {
+        let mut fake = Fake::on_screen(clipped("screen.png"));
+        let cancel = fake.cancel_flag();
+        let report = run(&mut fake, &cancel, timing());
+
+        assert_eq!(report.outcome, SpireActionOutcome::Completed);
+        assert_eq!(report.detections, 18);
+        assert_eq!(report.acted, 18);
+        assert_eq!(report.skipped, 0);
+        assert_eq!(fake.count("key_down(A)"), 18);
+        assert_eq!(
+            &fake.events()[..4],
+            ["move(826,40)", "down", "up", "key_down(A)"]
+        );
+        assert!(fake.events().iter().any(|event| event == "move(970,40)"));
+        assert!(fake.events().iter().any(|event| event == "move(34,265)"));
+        assert!(
+            !fake.events().iter().any(|event| event == "move(826,122)"),
+            "overlapping crown click must be replaced by the safe body click"
+        );
+    }
+
+    #[test]
+    fn scan_only_uses_the_same_edge_aware_detector_without_input() {
+        let mut fake = Fake::on_screen(clipped("screen.png"));
+        let cancel = fake.cancel_flag();
+        let report = scan_once(&mut fake, &cancel).expect("scan");
+
+        assert_eq!(report.count, 18);
+        assert_eq!(report.detections[0].center, Point::new(826, 40));
+        assert_eq!(report.detections[5].center, Point::new(34, 265));
+        assert!(fake.events().is_empty());
     }
 
     #[test]

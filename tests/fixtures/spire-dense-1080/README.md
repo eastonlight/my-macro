@@ -19,20 +19,23 @@ higher on screen. This scene reproduces both.
 
 ## Crowns in this scene
 
-| Column (x) | Crown centres (y) | Status |
+| Column (x) | Spire anchors | Action click |
 | --- | --- | --- |
-| 574 | 156, 299, 443, 587 | detected |
-| 718 | 84, 227, 371, 516 | detected |
-| 862 | 84, 228, 372, 515 | detected |
-| 1006 | 227, 372, 515 | detected |
+| 574 | 156, 299, 443, 587 | body `(574,74)` for 156; crowns for the rest |
+| 718 | 84, 227, 371, 516 | crown clicks |
+| 862 | 84, 228, 372, 515 | crown clicks |
+| 1006 | 156, 227, 372, 515 | body `(1006,74)` for 156; crowns for the rest |
 
-Detected: **17** clickable Spires: 15 fully visible crowns plus two top-clipped
-bodies (see `src/spire_vision.rs::DENSE_EXPECTED` and `DENSE_TOP_CLIPPED`).
+Detected: **16** clickable Spires: 14 retained crown clicks plus two preferred
+top-band body clicks (`DENSE_PRIMARY_CLICKS` and `DENSE_TOP_BAND`). The body
+click at `x=574` replaces an overlapping crown click; the one at `x=1006`
+recovers the matching Spire that the crown pass misses.
 
 Edge cases and deliberate exclusions:
 
-- `(574, 74)` and `(1006, 74)` — their crown centres are above the client, but
-  the calibrated top-band fragment clicks an opaque part of each visible body.
+- `(574, 74)` and `(1006, 74)` click opaque upper-body pixels. Live calibration
+  on the clipped fixture showed this avoids an overlapping crown coordinate that
+  can select the next Spire underneath.
 - `(862, ~803)` — crown whose visible part is occluded by the unit wireframe console;
   the centre is inside the HUD contour and remains excluded.
 - `x ≈ 1150, y ≈ 250` — Greater Spire, a different building; the template must not

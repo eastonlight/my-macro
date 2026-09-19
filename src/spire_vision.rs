@@ -2,10 +2,10 @@
 //!
 //! This is the Spire instance of the shared [`crate::building_vision`] profile
 //! detector. The calibrated 96×96 crown template is the primary pass; two
-//! complementary fragment passes cover crowns that the client edge clips:
-//! a top-band body fragment for the Spires whose crowns are above `y = 0` and
-//! a right-crown fragment for a crown clipped by the left edge. Their clicks
-//! stay inside the guarded playfield and are merged by crown-centre anchors.
+//! complementary fragment passes cover unsafe or clipped crown clicks: a top-band
+//! body fragment for the overlapping top row, plus a right-crown fragment for a
+//! crown clipped by the left edge. Their clicks stay inside the guarded playfield
+//! and are merged by crown-centre anchors.
 //!
 //! The committed screenshots are **single calibration scenes**, not evidence of
 //! generalisation. Candidate clicks must still pass selection-panel verification
@@ -71,15 +71,14 @@ static LEFT_EDGE_PROFILE: BuildingProfile = BuildingProfile {
     ..PROFILE
 };
 
-/// Complementary fragment pass for the Spires whose crowns are above the top
-/// edge: only the crown's lowest rows and the upper body are on screen, so the
-/// fragment is cut from a visible Spire body and its click lands on that body
-/// (`y = 40`), never on the off-screen crown centre.
+/// Complementary fragment pass for the overlapping top row. Live probing showed
+/// that a crown click near `y = 122` can select the next Spire underneath, while
+/// clicking the opaque upper body at `y = 40` selects the intended top-row Spire.
+/// The pass also recovers a top-row Spire whose crown match falls below threshold.
 ///
-/// The five top-edge Spires score 0.83…0.98 here while terrain, resource-bar
-/// artwork and the row-A crowns stay at or below 0.24; the click also stays
-/// inside the top band (`y < 88`), which is what keeps the pass from re-finding
-/// fully visible crowns.
+/// The five top-row Spires score 0.83…0.98 here while terrain and resource-bar
+/// artwork stay at or below 0.24. Restricting the click to `y < 88` prevents the
+/// same body template from replacing safe crown clicks lower in the playfield.
 static TOP_BAND_PROFILE: BuildingProfile = BuildingProfile {
     template: TOP_BAND_TEMPLATE,
     template_w: TOP_BAND_TEMPLATE_W,
@@ -96,10 +95,12 @@ static TOP_BAND_PROFILE: BuildingProfile = BuildingProfile {
     ..PROFILE
 };
 
-/// Fragment click minus the crown centre (the primary pass's anchor) for each
-/// complementary pass. The left-edge fragment clicks the crown centre itself;
-/// the top-band fragment clicks the body 62 px below the off-screen centre.
-const TOP_BAND_OFFSET: Point = Point::new(0, 62);
+/// Fragment click minus the crown-centre anchor for each complementary pass.
+/// The left-edge fragment clicks the crown centre itself. The top-band click is
+/// 82 px above the overlapping crown click; live probing showed that this upper
+/// body point selects the intended top-row Spire, while the crown click selects
+/// the next Spire underneath it.
+const TOP_BAND_OFFSET: Point = Point::new(0, -82);
 const LEFT_EDGE_OFFSET: Point = Point::new(0, 0);
 
 /// Two anchors closer than this are the same building when the complementary
@@ -234,10 +235,17 @@ pub fn detect_spires(frame: &Frame) -> SpireScan {
         .saturating_add(top_band.evaluated)
         .saturating_add(left_edge.evaluated);
 
-    let mut detections = primary.detections;
-    // Compare physical crown centres, not click points on different fragments.
-    let mut anchors: Vec<Point> = detections.iter().map(|d| d.center).collect();
-    for (scan, offset) in [(top_band, TOP_BAND_OFFSET), (left_edge, LEFT_EDGE_OFFSET)] {
+    let mut detections = Vec::new();
+    let mut anchors: Vec<Point> = Vec::new();
+    // Prefer the top-band body click over an overlapping primary crown click:
+    // live probing proved the body click selects the top-row Spire, whereas the
+    // crown click can select the next Spire underneath it. The left-edge click
+    // is equally specific and the primary pass fills in every remaining crown.
+    for (scan, offset) in [
+        (top_band, TOP_BAND_OFFSET),
+        (left_edge, LEFT_EDGE_OFFSET),
+        (primary, Point::new(0, 0)),
+    ] {
         for candidate in scan.detections {
             let anchor = Point::new(candidate.center.x - offset.x, candidate.center.y - offset.y);
             if anchors.iter().any(|kept| {
@@ -352,11 +360,11 @@ mod tests {
         Point::new(790, 655),
     ];
 
-    /// The fifteen fully visible crowns in the dense fixture `spire-dense-1080/screen.png`.
-    const DENSE_EXPECTED: [Point; 15] = [
+    /// Primary crown clicks retained in the dense fixture. The crown at `(574, 156)`
+    /// is deliberately replaced by the safer top-band body click `(574, 74)`.
+    const DENSE_PRIMARY_CLICKS: [Point; 14] = [
         Point::new(718, 84),
         Point::new(862, 84),
-        Point::new(574, 156),
         Point::new(718, 227),
         Point::new(862, 228),
         Point::new(1006, 227),
@@ -371,10 +379,9 @@ mod tests {
         Point::new(574, 587),
     ];
 
-    /// The two Spires in the dense fixture whose crowns are clipped by the top
-    /// edge. Their crown centres are off-screen, so the top-band fragment clicks
-    /// an opaque part of the visible body instead.
-    const DENSE_TOP_CLIPPED: [Point; 2] = [Point::new(574, 74), Point::new(1006, 74)];
+    /// Top-band body clicks: one replaces an overlapping crown click and one
+    /// recovers the matching Spire whose crown pass was missed.
+    const DENSE_TOP_BAND: [Point; 2] = [Point::new(574, 74), Point::new(1006, 74)];
 
     #[test]
     fn the_dense_fixture_yields_every_visible_spire() {
@@ -382,10 +389,9 @@ mod tests {
         let screen = Frame::from_png(&path).unwrap_or_else(|error| panic!("{path:?}: {error}"));
         let scan = detect_spires(&screen);
         assert!(scan.supported_profile);
-        // The fifteen fully visible crowns plus the two whose crowns are above
-        // the top edge, which the top-band fragment reaches on their bodies.
-        assert_eq!(scan.count(), 17, "detections: {:?}", scan.detections);
-        for expected in DENSE_EXPECTED {
+        // Fourteen primary clicks plus two preferred top-band body clicks.
+        assert_eq!(scan.count(), 16, "detections: {:?}", scan.detections);
+        for expected in DENSE_PRIMARY_CLICKS {
             assert!(
                 scan.detections
                     .iter()
@@ -394,22 +400,21 @@ mod tests {
                 scan.detections
             );
         }
-        for expected in DENSE_TOP_CLIPPED {
+        for expected in DENSE_TOP_BAND {
             assert!(
                 scan.detections
                     .iter()
                     .any(|d| distance(d.center, expected) <= 4),
-                "expected top-clipped body click near {expected:?}; got {:?}",
+                "expected top-band body click near {expected:?}; got {:?}",
                 scan.detections
             );
         }
     }
 
-    /// Every Spire the clipped-edge fixture shows, in the detector's `(y, x)`
-    /// order. The first five are the Spires whose crowns are above `y = 0`
-    /// (clicked on their visible bodies), `(34, 265)` is the Spire clipped by
-    /// the left edge (clicked at its crown centre), and the rest are complete
-    /// crowns the primary pass finds.
+    /// Every actionable Spire in the clipped-edge fixture, in `(y, x)` order.
+    /// The first five body clicks are preferred over overlapping crown clicks
+    /// because live probing proved the crown coordinates select the row below.
+    /// `(34, 265)` is the left-edge Spire; the rest are primary crown clicks.
     #[test]
     fn the_clipped_fixture_yields_every_visible_spire() {
         let scan = detect_spires(&clipped("screen.png"));
@@ -423,10 +428,6 @@ mod tests {
                 Point::new(1114, 40),
                 Point::new(1258, 40),
                 Point::new(1402, 40),
-                Point::new(826, 122),
-                Point::new(1114, 122),
-                Point::new(1258, 122),
-                Point::new(1402, 122),
                 Point::new(34, 265),
                 Point::new(826, 265),
                 Point::new(970, 266),

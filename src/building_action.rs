@@ -232,6 +232,18 @@ pub fn scan_once(
     cancel: &AtomicBool,
     profile: &BuildingProfile,
 ) -> Result<BuildingScanReport, BuildingScanError> {
+    scan_once_with_detector(adapter, cancel, profile, None)
+}
+
+/// Scan-only mode with an optional profile-specific detector. This keeps the
+/// preview path identical to the live action when a building needs complementary
+/// edge-fragment passes.
+pub fn scan_once_with_detector(
+    adapter: &mut dyn DesktopAdapter,
+    cancel: &AtomicBool,
+    profile: &BuildingProfile,
+    detector: Option<fn(&Frame) -> BuildingScan>,
+) -> Result<BuildingScanReport, BuildingScanError> {
     if cancel.load(Ordering::SeqCst) {
         return Err(BuildingScanError::Cancelled);
     }
@@ -270,7 +282,10 @@ pub fn scan_once(
         });
     }
 
-    let scan = building_vision::detect_buildings(&frame, profile);
+    let scan = detector.map_or_else(
+        || building_vision::detect_buildings(&frame, profile),
+        |detect| detect(&frame),
+    );
     if cancel.load(Ordering::SeqCst) {
         return Err(BuildingScanError::Cancelled);
     }

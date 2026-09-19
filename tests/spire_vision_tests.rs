@@ -261,34 +261,31 @@ fn test_dense_spire_scene_detects_all_safe_spires_with_exact_ground_truth()
 
     let scan = detect_spires(&screen);
     assert!(scan.supported_profile);
-    // The fifteen fully visible crowns plus the two Spires whose crowns sit
-    // above the top edge. The top-band fragment reaches those two on their
-    // visible bodies, so this scene reports 17 clicks instead of 15.
+    // Fourteen retained crown clicks plus two preferred top-band body clicks.
+    // The `(574, 74)` body click replaces the overlapping `(574, 156)` crown
+    // click; `(1006, 74)` recovers the matching Spire missed by the crown pass.
     assert_eq!(
         scan.detections.len(),
-        17,
-        "dense scene must detect the 15 safe fully visible crowns plus the 2 \
-         top-clipped body clicks; got {:?}",
+        16,
+        "dense scene must detect exactly 16 actionable Spires; got {:?}",
         scan.detections
     );
-    for top_clipped_body_click in [Point::new(574, 74), Point::new(1006, 74)] {
+    for top_band_body_click in [Point::new(574, 74), Point::new(1006, 74)] {
         assert!(
             scan.detections.iter().any(|d| {
-                (d.center.x - top_clipped_body_click.x).abs() <= 4
-                    && (d.center.y - top_clipped_body_click.y).abs() <= 4
+                (d.center.x - top_band_body_click.x).abs() <= 4
+                    && (d.center.y - top_band_body_click.y).abs() <= 4
             }),
-            "expected the top-clipped Spire body click near {top_clipped_body_click:?}; \
-             got {:?}",
+            "expected the top-band Spire body click near {top_band_body_click:?}; got {:?}",
             scan.detections
         );
     }
 
     // Ground truth definition for each visible crown:
     // (exact center, score range, min edge agreement)
-    let ground_truth: [(Point, (f32, f32), f32); 15] = [
+    let ground_truth: [(Point, (f32, f32), f32); 14] = [
         (Point::new(718, 84), (0.85, 0.93), 0.85),
         (Point::new(862, 84), (0.95, 1.00), 0.95),
-        (Point::new(574, 156), (0.95, 1.00), 0.94),
         (Point::new(718, 227), (0.83, 0.90), 0.78),
         (Point::new(1006, 227), (0.75, 0.83), 0.70),
         (Point::new(862, 228), (0.85, 0.93), 0.85),
@@ -333,8 +330,7 @@ fn test_dense_spire_scene_detects_all_safe_spires_with_exact_ground_truth()
     }
 
     // Explicit verification of edge safety and excluded / negative objects:
-    // 1. Top-clipped crown anchors are above the screen, but their body clicks
-    // stay comfortably below the top camera-scroll guard.
+    // 1. Preferred top-band body clicks stay below the top camera-scroll guard.
     assert!(
         !scan.detections.iter().any(|d| d.center.y < 50),
         "no detection may click inside the top scroll region"
@@ -382,13 +378,6 @@ fn test_dense_spire_scene_generates_annotated_png() -> Result<(), Box<dyn std::e
             canvas.crosshair(cx, cy, 8, GREEN);
         }
 
-        // Draw the off-screen crown anchors in yellow for reference. Their safe
-        // body click points are already rendered in green above.
-        for cx in [574, 1006] {
-            canvas.outline_rect(cx - 48, 0, 96, 48, 2, YELLOW);
-            canvas.crosshair(cx, 12, 6, YELLOW);
-        }
-
         // Draw the lower HUD-obscured excluded crown in orange at (862, 803).
         canvas.outline_rect(862 - 48, 803 - 48, 96, 96, 2, ORANGE);
         canvas.crosshair(862, 803, 8, ORANGE);
@@ -415,7 +404,6 @@ fn test_dense_spire_scene_generates_annotated_png() -> Result<(), Box<dyn std::e
 struct Ink(u8, u8, u8);
 
 const GREEN: Ink = Ink(0, 255, 0);
-const YELLOW: Ink = Ink(255, 255, 0);
 const ORANGE: Ink = Ink(255, 140, 0);
 const MAGENTA: Ink = Ink(255, 0, 255);
 
