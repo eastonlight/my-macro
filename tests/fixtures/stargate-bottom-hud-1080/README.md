@@ -14,9 +14,9 @@ order:
 | 2 | `(624, 566)` |
 | 3 | `(912, 566)` |
 | 4 | `(1344, 566)` |
-| 5 | `(704, 682)` |
-| 6 | `(992, 682)` |
-| 7 | `(1280, 682)` |
+| 5 | `(704, 666)` |
+| 6 | `(992, 666)` |
+| 7 | `(1280, 666)` |
 
 The bottom three centres come from the visible upper hull. Selection-panel
 verification is still required before the action sends `A`.
