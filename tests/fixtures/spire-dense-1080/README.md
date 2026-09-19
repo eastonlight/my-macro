@@ -26,17 +26,17 @@ higher on screen. This scene reproduces both.
 | 862 | 84, 228, 372, 515 | detected |
 | 1006 | 227, 372, 515 | detected |
 
-Detected: **15** crowns (see `src/spire_vision.rs::DENSE_EXPECTED`).
+Detected: **17** clickable Spires: 15 fully visible crowns plus two top-clipped
+bodies (see `src/spire_vision.rs::DENSE_EXPECTED` and `DENSE_TOP_CLIPPED`).
 
-Deliberate exclusions:
+Edge cases and deliberate exclusions:
 
-- `(574, ~12)` and `(1006, ~12)` — crowns clipped by the top of the client; the only
-  clickable centre would sit inside the camera-scroll edge guard.
+- `(574, 74)` and `(1006, 74)` — their crown centres are above the client, but
+  the calibrated top-band fragment clicks an opaque part of each visible body.
 - `(862, ~803)` — crown whose visible part is occluded by the unit wireframe console;
-  the centre is inside the HUD contour.
+  the centre is inside the HUD contour and remains excluded.
 - `x ≈ 1150, y ≈ 250` — Greater Spire, a different building; the template must not
   match it.
-
 ## Calibration scope (honest limits)
 
 This is **one scene at one camera position** with one team colour. It proves the

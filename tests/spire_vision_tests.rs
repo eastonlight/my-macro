@@ -253,7 +253,7 @@ fn test_fullscreen_detect_spires_rejects_distractor_crops_at_multiple_offsets() 
 }
 
 #[test]
-fn test_dense_spire_scene_detects_all_fifteen_safe_crowns_with_exact_ground_truth()
+fn test_dense_spire_scene_detects_all_safe_spires_with_exact_ground_truth()
 -> Result<(), Box<dyn std::error::Error>> {
     let path = std::path::Path::new("tests/fixtures/spire-dense-1080/screen.png");
     let screen = Frame::from_png(path)?;
@@ -261,12 +261,27 @@ fn test_dense_spire_scene_detects_all_fifteen_safe_crowns_with_exact_ground_trut
 
     let scan = detect_spires(&screen);
     assert!(scan.supported_profile);
+    // The fifteen fully visible crowns plus the two Spires whose crowns sit
+    // above the top edge. The top-band fragment reaches those two on their
+    // visible bodies, so this scene reports 17 clicks instead of 15.
     assert_eq!(
         scan.detections.len(),
-        15,
-        "dense scene must detect exactly 15 safe fully visible crowns; got {:?}",
+        17,
+        "dense scene must detect the 15 safe fully visible crowns plus the 2 \
+         top-clipped body clicks; got {:?}",
         scan.detections
     );
+    for top_clipped_body_click in [Point::new(574, 74), Point::new(1006, 74)] {
+        assert!(
+            scan.detections.iter().any(|d| {
+                (d.center.x - top_clipped_body_click.x).abs() <= 4
+                    && (d.center.y - top_clipped_body_click.y).abs() <= 4
+            }),
+            "expected the top-clipped Spire body click near {top_clipped_body_click:?}; \
+             got {:?}",
+            scan.detections
+        );
+    }
 
     // Ground truth definition for each visible crown:
     // (exact center, score range, min edge agreement)
@@ -317,11 +332,12 @@ fn test_dense_spire_scene_detects_all_fifteen_safe_crowns_with_exact_ground_trut
         );
     }
 
-    // Explicit verification of excluded / negative objects:
-    // 1. Top-clipped crowns near y0 (x=574 and x=1006 near y=12):
+    // Explicit verification of edge safety and excluded / negative objects:
+    // 1. Top-clipped crown anchors are above the screen, but their body clicks
+    // stay comfortably below the top camera-scroll guard.
     assert!(
         !scan.detections.iter().any(|d| d.center.y < 50),
-        "top-clipped crowns with unsafe/scroll clickpoints must be excluded"
+        "no detection may click inside the top scroll region"
     );
     // 2. Lower partially HUD-obscured crown at x=862 y≈803:
     assert!(
@@ -366,7 +382,8 @@ fn test_dense_spire_scene_generates_annotated_png() -> Result<(), Box<dyn std::e
             canvas.crosshair(cx, cy, 8, GREEN);
         }
 
-        // Draw top-clipped excluded crowns in yellow: (574, 12) and (1006, 12).
+        // Draw the off-screen crown anchors in yellow for reference. Their safe
+        // body click points are already rendered in green above.
         for cx in [574, 1006] {
             canvas.outline_rect(cx - 48, 0, 96, 48, 2, YELLOW);
             canvas.crosshair(cx, 12, 6, YELLOW);
